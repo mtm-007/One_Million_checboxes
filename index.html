@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Web to Phone Call Test</title>
+    <script src="https://media.twiliocdn.com/sdk/js/voice/v2/twilio.min.js"></script>
+  </head>
+  <body>
+    <h1>📞 Web to Phone Test</h1>
+
+    <input id="phoneNumber" type="text" placeholder="+1234567890" />
+    <button id="callButton">Call</button>
+    <button id="hangupButton" disabled>Hang Up</button>
+
+    <script>
+      let device;
+      let connection;
+
+      async function initDevice() {
+        const response = await fetch("/token?identity=webUser");
+        const data = await response.json();
+
+        device = new Twilio.Device(data.token);
+
+        device.on("ready", () => console.log("Twilio.Device Ready"));
+        device.on("error", err => console.error("Device error:", err));
+        device.on("disconnect", () => {
+          console.log("Call ended");
+          document.getElementById("hangupButton").disabled = true;
+          document.getElementById("callButton").disabled = false;
+        });
+      }
+
+      document.getElementById("callButton").onclick = () => {
+        const phoneNumber = document.getElementById("phoneNumber").value;
+        if (!phoneNumber) return alert("Enter a phone number (e.g. +14155552671)");
+
+        connection = device.connect({ To: phoneNumber });
+        document.getElementById("callButton").disabled = true;
+        document.getElementById("hangupButton").disabled = false;
+      };
+
+      document.getElementById("hangupButton").onclick = () => {
+        if (connection) connection.disconnect();
+      };
+
+      initDevice();
+    </script>
+  </body>
+</html>
