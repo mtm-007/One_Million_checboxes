@@ -4,6 +4,49 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Web Calling Application</title>
+    <!-- Twilio Voice SDK 2.16.0 (local, with cache-busting) -->
+    <script type="text/javascript" src="/static/twilio-voice.min.js?cache_bust=202511120320" onerror="console.error('Failed to fetch local Twilio SDK:', event); loadTwilioFallback();"></script>
+    <script>
+        // Fallback to Twilio 1.x CDN if local fails
+        function loadTwilioFallback() {
+            console.log('Local Twilio SDK failed, trying CDN fallback...');
+            const script = document.createElement('script');
+            script.type = 'text/javascript';
+            script.src = 'https://media.twiliocdn.com/sdk/js/client/releases/1.13.0/twilio.min.js';
+            script.onload = () => console.log('Twilio 1.13.0 CDN loaded successfully');
+            script.onerror = () => console.error('Twilio 1.13.0 CDN failed to load');
+            document.head.appendChild(script);
+        }
+
+        try {
+            console.log('Checking Twilio SDK load...');
+            if (typeof Twilio === 'undefined' || typeof Twilio.Voice === 'undefined' || typeof Twilio.Voice.Device === 'undefined') {
+                console.error('Twilio Voice SDK 2.16.0 not defined after load');
+            } else {
+                console.log('Twilio Voice SDK 2.16.0 loaded successfully:', Twilio);
+                console.log('Twilio.Voice:', Twilio.Voice);
+                console.log('Twilio.Voice.Device:', Twilio.Voice.Device);
+            }
+        } catch (e) {
+            console.error('Twilio SDK execution error:', e);
+        }
+
+        // Log fetch details
+        fetch('/static/twilio-voice.min.js?cache_bust=202511120320')
+            .then(response => {
+                console.log('Twilio SDK fetch headers:', {
+                    status: response.status,
+                    contentType: response.headers.get('Content-Type'),
+                    csp: response.headers.get('Content-Security-Policy')
+                });
+                return response.text();
+            })
+            .then(text => {
+                console.log('Twilio SDK first 100 chars:', text.substring(0, 100));
+            })
+            .catch(err => console.error('Twilio SDK fetch failed:', err));
+    </script>
+
     <style>
         * {
             margin: 0;
@@ -34,6 +77,60 @@
             color: #333;
             margin-bottom: 30px;
             text-align: center;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 25px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .tab {
+            padding: 12px 20px;
+            background: none;
+            border: none;
+            font-size: 14px;
+            font-weight: 600;
+            color: #666;
+            cursor: pointer;
+            transition: all 0.3s;
+            border-bottom: 3px solid transparent;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .info-box {
+            background: #f0f9ff;
+            border-left: 4px solid #3b82f6;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .info-box strong {
+            color: #1e40af;
+            display: block;
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+
+        .info-box p {
+            color: #1e40af;
+            font-size: 14px;
+            line-height: 1.5;
+            margin: 0;
         }
 
         .phone-input-group {
@@ -67,7 +164,7 @@
             margin-top: 20px;
         }
 
-        button {
+        button:not(.tab) {
             flex: 1;
             padding: 15px;
             border: none;
@@ -130,6 +227,22 @@
             color: #1e40af;
         }
 
+        .audio-status {
+            margin-top: 15px;
+            padding: 12px;
+            background: #f3f4f6;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 14px;
+            display: none;
+        }
+
+        .audio-status.active {
+            display: block;
+            background: #dcfce7;
+            color: #166534;
+        }
+
         .call-history {
             margin-top: 30px;
             padding-top: 20px;
@@ -161,29 +274,108 @@
             font-size: 12px;
             color: #666;
         }
+
+        .call-badge {
+            background: #667eea;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>📞 Web Calling</h1>
         
-        <div class="phone-input-group">
-            <label for="phoneNumber">Enter Phone Number</label>
-            <input 
-                type="tel" 
-                id="phoneNumber" 
-                placeholder="+1234567890"
-                pattern="[\+]?[0-9]{10,15}"
-            >
+        <div class="tabs">
+            <button class="tab active" data-tab="browser">🎤 Browser</button>
+            <button class="tab" data-tab="direct">📞 Direct</button>
+            <button class="tab" data-tab="bridge">🔗 Bridge</button>
         </div>
 
-        <div class="button-group">
-            <button class="call-btn" id="callBtn">
-                📞 Make Call
-            </button>
-            <button class="hangup-btn" id="hangupBtn">
-                📵 Hang Up
-            </button>
+        <!-- Browser Calling Tab -->
+        <div class="tab-content active" id="browser-tab">
+            <div class="info-box">
+                <strong>🎤 Browser Call</strong>
+                <p>Talk directly through your web browser using your microphone.</p>
+            </div>
+            
+            <div class="phone-input-group">
+                <label for="browserPhoneNumber">Enter Phone Number</label>
+                <input 
+                    type="tel" 
+                    id="browserPhoneNumber" 
+                    placeholder="+1234567890"
+                >
+            </div>
+
+            <div class="button-group">
+                <button class="call-btn" id="browserCallBtn">
+                    🎤 Call from Browser
+                </button>
+                <button class="hangup-btn" id="browserHangupBtn">
+                    📵 Hang Up
+                </button>
+            </div>
+
+            <div class="audio-status" id="audioStatus">
+                🎤 Microphone Active - Speaking...
+            </div>
+        </div>
+
+        <!-- Direct Call Tab -->
+        <div class="tab-content" id="direct-tab">
+            <div class="info-box">
+                <strong>📞 Direct Call</strong>
+                <p>Call a phone with automated message. No conversation needed.</p>
+            </div>
+            
+            <div class="phone-input-group">
+                <label for="directPhoneNumber">Target Phone Number</label>
+                <input 
+                    type="tel" 
+                    id="directPhoneNumber" 
+                    placeholder="+1234567890"
+                >
+            </div>
+
+            <div class="button-group">
+                <button class="call-btn" id="directCallBtn">
+                    📞 Make Direct Call
+                </button>
+                <button class="hangup-btn" id="directHangupBtn">
+                    📵 End Call
+                </button>
+            </div>
+        </div>
+
+        <!-- Bridge Calling Tab -->
+        <div class="tab-content" id="bridge-tab">
+            <div class="info-box">
+                <strong>🔗 Bridge Call</strong>
+                <p>Your phone rings first, then connects to target for two-way talk.</p>
+            </div>
+            
+            <div class="phone-input-group">
+                <label for="bridgePhoneNumber">Target Phone Number</label>
+                <input 
+                    type="tel" 
+                    id="bridgePhoneNumber" 
+                    placeholder="+1234567890"
+                >
+            </div>
+
+            <div class="button-group">
+                <button class="call-btn" id="bridgeCallBtn">
+                    📞 Make Bridge Call
+                </button>
+                <button class="hangup-btn" id="bridgeHangupBtn">
+                    📵 Hang Up
+                </button>
+            </div>
         </div>
 
         <div class="status" id="status"></div>
@@ -197,88 +389,335 @@
     </div>
 
     <script>
-        const phoneInput = document.getElementById('phoneNumber');
-        const callBtn = document.getElementById('callBtn');
-        const hangupBtn = document.getElementById('hangupBtn');
-        const status = document.getElementById('status');
-        const callHistoryList = document.getElementById('callHistoryList');
-
-        let currentCallSid = null;
+        let twilioDevice = null;
+        let currentConnection = null;
         let callHistory = JSON.parse(localStorage.getItem('callHistory') || '[]');
+        let currentTab = 'browser';
+        let isTwilioV1 = false; // Track if using 1.x SDK
 
-        // Display call history on load
-        displayCallHistory();
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const tabName = tab.dataset.tab;
+                switchTab(tabName);
+            });
+        });
 
-        callBtn.addEventListener('click', async () => {
-            const phoneNumber = phoneInput.value.trim();
+        function switchTab(tabName) {
+            currentTab = tabName;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+            
+            hideStatus();
+        }
+
+        // Initialize Twilio Device (handles 2.x and 1.x APIs)
+        async function initializeTwilioDevice() {
+            try {
+                // Check if Twilio library is loaded
+                if (isTwilioV1) {
+                    if (typeof Twilio === 'undefined' || typeof Twilio.Device === 'undefined') {
+                        console.error('❌ Twilio Voice SDK 1.13.0 not loaded');
+                        showStatus('Twilio SDK not loaded. Please refresh the page.', 'error');
+                        return false;
+                    }
+                } else {
+                    if (typeof Twilio === 'undefined' || typeof Twilio.Voice === 'undefined' || typeof Twilio.Voice.Device === 'undefined') {
+                        console.error('❌ Twilio Voice SDK 2.16.0 not loaded - check /static/twilio-voice.min.js');
+                        showStatus('Twilio SDK not loaded. Please refresh the page.', 'error');
+                        return false;
+                    }
+                }
+                
+                console.log(`✅ Twilio Voice SDK ${isTwilioV1 ? '1.13.0' : '2.16.0'} loaded`);
+                console.log('Fetching token...');
+                
+                const response = await fetch('/token?identity=web_user');
+                const data = await response.json();
+                
+                console.log('Token response:', data);
+                
+                if (data.error) {
+                    console.error('Token error:', data.error);
+                    showStatus(`Token error: ${data.error}`, 'error');
+                    return false;
+                }
+                
+                if (!data.token) {
+                    console.error('No token in response');
+                    showStatus('No token received from server', 'error');
+                    return false;
+                }
+                
+                console.log('Initializing Twilio Device...');
+                if (isTwilioV1) {
+                    twilioDevice = new Twilio.Device(data.token, {
+                        codecPreferences: ['opus', 'pcmu'],
+                        debug: true
+                    });
+                } else {
+                    twilioDevice = new Twilio.Voice.Device(data.token, {
+                        codecPreferences: ['opus', 'pcmu'],
+                        sounds: {
+                            incoming: true,
+                            outgoing: true,
+                            disconnect: true
+                        },
+                        debug: true
+                    });
+                }
+
+                twilioDevice.on('ready', (device) => {
+                    console.log('✅ Twilio Device Ready!', device);
+                    showStatus('Browser calling ready!', 'success');
+                });
+
+                twilioDevice.on('error', (error) => {
+                    console.error('❌ Twilio Device Error:', error);
+                    showStatus(`Device Error: ${error.message} (Code: ${error.code || 'N/A'})`, 'error');
+                });
+
+                twilioDevice.on('connect', (conn) => {
+                    console.log('✅ Call connected', conn);
+                    currentConnection = conn;
+                    document.getElementById('audioStatus').classList.add('active');
+                    showStatus('Call connected! Speak into your microphone.', 'success');
+                });
+
+                twilioDevice.on('disconnect', (conn) => {
+                    console.log('Call ended', conn);
+                    resetBrowserCallUI();
+                    showStatus('Call ended', 'info');
+                });
+
+                twilioDevice.on('incoming', (conn) => {
+                    console.log('Incoming call:', conn);
+                    showStatus('Incoming call...', 'info');
+                    conn.accept();
+                });
+
+                console.log('✅ Twilio Device initialization started');
+                return true;
+            } catch (error) {
+                console.error('❌ Failed to initialize device:', error);
+                showStatus(`Initialization failed: ${error.message}`, 'error');
+                return false;
+            }
+        }
+
+        // Initialize on page load with retry mechanism
+        document.addEventListener('DOMContentLoaded', () => {
+            let retries = 3;
+            async function tryInitialize() {
+                const success = await initializeTwilioDevice();
+                if (!success && retries > 0) {
+                    retries--;
+                    console.log(`Retrying initialization (${retries} attempts left)...`);
+                    setTimeout(tryInitialize, 2000);
+                } else if (!success) {
+                    console.error('Failed to initialize Twilio Device after retries');
+                }
+            }
+            tryInitialize();
+        });
+
+        // Browser Call Button
+        document.getElementById('browserCallBtn').addEventListener('click', async () => {
+            const phoneNumber = document.getElementById('browserPhoneNumber').value.trim();
             
             if (!phoneNumber) {
                 showStatus('Please enter a phone number', 'error');
                 return;
             }
 
-            // Basic validation
             if (!/^[\+]?[0-9]{10,15}$/.test(phoneNumber)) {
                 showStatus('Please enter a valid phone number (e.g., +1234567890)', 'error');
                 return;
             }
 
-            callBtn.disabled = true;
-            showStatus('Initiating call...', 'info');
+            if (!twilioDevice) {
+                showStatus('Initializing browser calling...', 'info');
+                const initialized = await initializeTwilioDevice();
+                if (!initialized) {
+                    showStatus('Browser calling not available. Please refresh and try again.', 'error');
+                    return;
+                }
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+
+            document.getElementById('browserCallBtn').disabled = true;
+            showStatus('Connecting call from browser...', 'info');
+
+            try {
+                const params = { params: { To: phoneNumber } };
+                console.log('Attempting to connect call to:', phoneNumber);
+                currentConnection = twilioDevice.connect(params);
+                
+                document.getElementById('browserCallBtn').style.display = 'none';
+                document.getElementById('browserHangupBtn').style.display = 'block';
+                
+                addToCallHistory(phoneNumber, 'Browser');
+                
+            } catch (error) {
+                console.error('Call connection error:', error);
+                showStatus(`Call failed: ${error.message}`, 'error');
+                document.getElementById('browserCallBtn').disabled = false;
+            }
+        });
+
+        // Browser Hangup Button
+        document.getElementById('browserHangupBtn').addEventListener('click', () => {
+            if (currentConnection) {
+                currentConnection.disconnect();
+            }
+            if (twilioDevice) {
+                twilioDevice.disconnectAll();
+            }
+            resetBrowserCallUI();
+            showStatus('Call ended', 'info');
+        });
+
+        // Direct Call Button
+        document.getElementById('directCallBtn').addEventListener('click', async () => {
+            const phoneNumber = document.getElementById('directPhoneNumber').value.trim();
+            
+            if (!phoneNumber) {
+                showStatus('Please enter a phone number', 'error');
+                return;
+            }
+
+            if (!/^[\+]?[0-9]{10,15}$/.test(phoneNumber)) {
+                showStatus('Please enter a valid phone number (e.g., +1234567890)', 'error');
+                return;
+            }
+
+            document.getElementById('directCallBtn').disabled = true;
+            showStatus('Initiating direct call...', 'info');
 
             try {
                 const response = await fetch('/make-call', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        to_number: phoneNumber
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        to_number: phoneNumber,
+                        mode: 'direct'
                     })
                 });
 
                 const data = await response.json();
 
                 if (response.ok) {
-                    currentCallSid = data.call_sid;
-                    showStatus('Call connected successfully!', 'success');
-                    callBtn.style.display = 'none';
-                    hangupBtn.style.display = 'block';
-                    
-                    // Add to call history
-                    addToCallHistory(phoneNumber);
+                    showStatus('Direct call initiated! Target will receive automated message.', 'success');
+                    document.getElementById('directCallBtn').style.display = 'none';
+                    document.getElementById('directHangupBtn').style.display = 'block';
+                    addToCallHistory(phoneNumber, 'Direct');
                 } else {
                     showStatus(`Error: ${data.error}`, 'error');
-                    callBtn.disabled = false;
+                    document.getElementById('directCallBtn').disabled = false;
                 }
             } catch (error) {
                 showStatus(`Error: ${error.message}`, 'error');
-                callBtn.disabled = false;
+                document.getElementById('directCallBtn').disabled = false;
             }
         });
 
-        hangupBtn.addEventListener('click', () => {
+        // Direct Hangup Button
+        document.getElementById('directHangupBtn').addEventListener('click', () => {
             showStatus('Call ended', 'info');
-            resetCallUI();
+            resetDirectCallUI();
+        });
+
+        // Bridge Call Button
+        document.getElementById('bridgeCallBtn').addEventListener('click', async () => {
+            const phoneNumber = document.getElementById('bridgePhoneNumber').value.trim();
+            
+            if (!phoneNumber) {
+                showStatus('Please enter a phone number', 'error');
+                return;
+            }
+
+            if (!/^[\+]?[0-9]{10,15}$/.test(phoneNumber)) {
+                showStatus('Please enter a valid phone number (e.g., +1234567890)', 'error');
+                return;
+            }
+
+            document.getElementById('bridgeCallBtn').disabled = true;
+            showStatus('Initiating bridge call...', 'info');
+
+            try {
+                const response = await fetch('/make-call', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        to_number: phoneNumber,
+                        mode: 'bridge'
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showStatus('Bridge call initiated! Your phone will ring first.', 'success');
+                    document.getElementById('bridgeCallBtn').style.display = 'none';
+                    document.getElementById('bridgeHangupBtn').style.display = 'block';
+                    addToCallHistory(phoneNumber, 'Bridge');
+                } else {
+                    showStatus(`Error: ${data.error}`, 'error');
+                    document.getElementById('bridgeCallBtn').disabled = false;
+                }
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                document.getElementById('bridgeCallBtn').disabled = false;
+            }
+        });
+
+        // Bridge Hangup Button
+        document.getElementById('bridgeHangupBtn').addEventListener('click', () => {
+            showStatus('Call ended', 'info');
+            resetBridgeCallUI();
         });
 
         function showStatus(message, type) {
+            const status = document.getElementById('status');
             status.textContent = message;
             status.className = `status ${type}`;
             status.style.display = 'block';
         }
 
-        function resetCallUI() {
-            callBtn.style.display = 'block';
-            callBtn.disabled = false;
-            hangupBtn.style.display = 'none';
-            currentCallSid = null;
-            phoneInput.value = '';
+        function hideStatus() {
+            document.getElementById('status').style.display = 'none';
         }
 
-        function addToCallHistory(number) {
+        function resetBrowserCallUI() {
+            document.getElementById('browserCallBtn').style.display = 'block';
+            document.getElementById('browserCallBtn').disabled = false;
+            document.getElementById('browserHangupBtn').style.display = 'none';
+            document.getElementById('audioStatus').classList.remove('active');
+            document.getElementById('browserPhoneNumber').value = '';
+            currentConnection = null;
+        }
+
+        function resetDirectCallUI() {
+            document.getElementById('directCallBtn').style.display = 'block';
+            document.getElementById('directCallBtn').disabled = false;
+            document.getElementById('directHangupBtn').style.display = 'none';
+            document.getElementById('directPhoneNumber').value = '';
+        }
+
+        function resetBridgeCallUI() {
+            document.getElementById('bridgeCallBtn').style.display = 'block';
+            document.getElementById('bridgeCallBtn').disabled = false;
+            document.getElementById('bridgeHangupBtn').style.display = 'none';
+            document.getElementById('bridgePhoneNumber').value = '';
+        }
+
+        function addToCallHistory(number, type) {
             const call = {
                 number: number,
+                type: type,
                 timestamp: new Date().toISOString(),
                 displayTime: new Date().toLocaleString()
             };
@@ -293,18 +732,25 @@
         }
 
         function displayCallHistory() {
+            const list = document.getElementById('callHistoryList');
             if (callHistory.length === 0) {
-                callHistoryList.innerHTML = '<p style="text-align: center; color: #999;">No calls yet</p>';
+                list.innerHTML = '<p style="text-align: center; color: #999;">No calls yet</p>';
                 return;
             }
 
-            callHistoryList.innerHTML = callHistory.map(call => `
+            list.innerHTML = callHistory.map(call => `
                 <div class="call-item">
-                    <span class="call-number">${call.number}</span>
+                    <div>
+                        <span class="call-number">${call.number}</span>
+                        <span class="call-badge">${call.type}</span>
+                    </div>
                     <span class="call-time">${call.displayTime}</span>
                 </div>
             `).join('');
         }
+
+        // Display call history on load
+        displayCallHistory();
     </script>
 </body>
 </html>

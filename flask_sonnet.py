@@ -64,16 +64,47 @@ def make_call():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/voice', methods=['POST'])
+@app.route('/voice', methods=['POST'])
 def voice():
     """Handle voice response for outbound calls"""
     response = VoiceResponse()
-    response.say('Hello! This is a call from your web calling application.', voice='alice')
     
-    # You can add more TwiML verbs here
-    # For example, connect to another number, play audio, etc.
+    gather = response.gather(num_digits=1, action='/handle-key', method='POST', timeout=10)
+    gather.say('Hello! Press 1 to connect to a representative, or press 2 to leave a message.', voice='alice')
+    
+    # If no input
+    response.say('We did not receive any input. Goodbye!', voice='alice')
     
     return str(response), 200, {'Content-Type': 'text/xml'}
 
+@app.route('/handle-key', methods=['POST'])
+def handle_key():
+    """Handle keypress from caller"""
+    digit = request.form.get('Digits')
+    response = VoiceResponse()
+    
+    if digit == '1':
+        response.say('Connecting you now.', voice='alice')
+        dial = Dial()
+        dial.number('+14699388764')  # Your phone
+        response.append(dial)
+    elif digit == '2':
+        response.say('Please leave a message after the beep.', voice='alice')
+        response.record(max_length=30, action='/handle-recording')
+    else:
+        response.say('Invalid option. Goodbye.', voice='alice')
+    
+    return str(response), 200, {'Content-Type': 'text/xml'}
+
+@app.route('/handle-recording', methods=['POST'])
+def handle_recording():
+    """Handle voice recording"""
+    recording_url = request.form.get('RecordingUrl')
+    print(f"Recording available at: {recording_url}")
+    
+    response = VoiceResponse()
+    response.say('Thank you for your message. Goodbye!', voice='alice')
+    return str(response), 200, {'Content-Type': 'text/xml'}
 @app.route('/incoming-call', methods=['POST'])
 def incoming_call():
     """Handle incoming calls"""
@@ -87,15 +118,14 @@ def incoming_call():
     
     return str(response), 200, {'Content-Type': 'text/xml'}
 
-@app.route('/call-status', methods=['POST'])
+@app.route("/call-status", methods=["GET", "POST"])
 def call_status():
-    """Receive call status updates"""
-    call_sid = request.form.get('CallSid')
-    call_status = request.form.get('CallStatus')
-    
-    print(f"Call {call_sid} status: {call_status}")
-    
-    return '', 200
+    from flask import request
+
+    data = request.values.to_dict()
+    print("📞 Call Status Callback:", data)
+
+    return "OK", 200
 
 @app.route('/token', methods=['GET'])
 def token():
