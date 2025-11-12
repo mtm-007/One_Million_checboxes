@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Calling Application</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 500px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .phone-input-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 600;
+        }
+
+        input[type="tel"] {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="tel"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        button {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .call-btn {
+            background: #10b981;
+            color: white;
+        }
+
+        .call-btn:hover:not(:disabled) {
+            background: #059669;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(16, 185, 129, 0.4);
+        }
+
+        .hangup-btn {
+            background: #ef4444;
+            color: white;
+            display: none;
+        }
+
+        .hangup-btn:hover:not(:disabled) {
+            background: #dc2626;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(239, 68, 68, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            font-weight: 600;
+            display: none;
+        }
+
+        .status.success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .status.info {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .call-history {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #e0e0e0;
+        }
+
+        .call-history h2 {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 15px;
+        }
+
+        .call-item {
+            background: #f9fafb;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .call-number {
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        .call-time {
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📞 Web Calling</h1>
+        
+        <div class="phone-input-group">
+            <label for="phoneNumber">Enter Phone Number</label>
+            <input 
+                type="tel" 
+                id="phoneNumber" 
+                placeholder="+1234567890"
+                pattern="[\+]?[0-9]{10,15}"
+            >
+        </div>
+
+        <div class="button-group">
+            <button class="call-btn" id="callBtn">
+                📞 Make Call
+            </button>
+            <button class="hangup-btn" id="hangupBtn">
+                📵 Hang Up
+            </button>
+        </div>
+
+        <div class="status" id="status"></div>
+
+        <div class="call-history">
+            <h2>Recent Calls</h2>
+            <div id="callHistoryList">
+                <p style="text-align: center; color: #999;">No calls yet</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const phoneInput = document.getElementById('phoneNumber');
+        const callBtn = document.getElementById('callBtn');
+        const hangupBtn = document.getElementById('hangupBtn');
+        const status = document.getElementById('status');
+        const callHistoryList = document.getElementById('callHistoryList');
+
+        let currentCallSid = null;
+        let callHistory = JSON.parse(localStorage.getItem('callHistory') || '[]');
+
+        // Display call history on load
+        displayCallHistory();
+
+        callBtn.addEventListener('click', async () => {
+            const phoneNumber = phoneInput.value.trim();
+            
+            if (!phoneNumber) {
+                showStatus('Please enter a phone number', 'error');
+                return;
+            }
+
+            // Basic validation
+            if (!/^[\+]?[0-9]{10,15}$/.test(phoneNumber)) {
+                showStatus('Please enter a valid phone number (e.g., +1234567890)', 'error');
+                return;
+            }
+
+            callBtn.disabled = true;
+            showStatus('Initiating call...', 'info');
+
+            try {
+                const response = await fetch('/make-call', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        to_number: phoneNumber
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    currentCallSid = data.call_sid;
+                    showStatus('Call connected successfully!', 'success');
+                    callBtn.style.display = 'none';
+                    hangupBtn.style.display = 'block';
+                    
+                    // Add to call history
+                    addToCallHistory(phoneNumber);
+                } else {
+                    showStatus(`Error: ${data.error}`, 'error');
+                    callBtn.disabled = false;
+                }
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                callBtn.disabled = false;
+            }
+        });
+
+        hangupBtn.addEventListener('click', () => {
+            showStatus('Call ended', 'info');
+            resetCallUI();
+        });
+
+        function showStatus(message, type) {
+            status.textContent = message;
+            status.className = `status ${type}`;
+            status.style.display = 'block';
+        }
+
+        function resetCallUI() {
+            callBtn.style.display = 'block';
+            callBtn.disabled = false;
+            hangupBtn.style.display = 'none';
+            currentCallSid = null;
+            phoneInput.value = '';
+        }
+
+        function addToCallHistory(number) {
+            const call = {
+                number: number,
+                timestamp: new Date().toISOString(),
+                displayTime: new Date().toLocaleString()
+            };
+            
+            callHistory.unshift(call);
+            if (callHistory.length > 5) {
+                callHistory = callHistory.slice(0, 5);
+            }
+            
+            localStorage.setItem('callHistory', JSON.stringify(callHistory));
+            displayCallHistory();
+        }
+
+        function displayCallHistory() {
+            if (callHistory.length === 0) {
+                callHistoryList.innerHTML = '<p style="text-align: center; color: #999;">No calls yet</p>';
+                return;
+            }
+
+            callHistoryList.innerHTML = callHistory.map(call => `
+                <div class="call-item">
+                    <span class="call-number">${call.number}</span>
+                    <span class="call-time">${call.displayTime}</span>
+                </div>
+            `).join('');
+        }
+    </script>
+</body>
+</html>
