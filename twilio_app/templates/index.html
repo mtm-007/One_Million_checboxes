@@ -389,6 +389,11 @@
         let currentConnection = null;
         let callHistory = JSON.parse(localStorage.getItem('callHistory') || '[]');
         let currentTab = 'browser';
+        
+        let currentCallSid = null;         // ADD THIS LINE
+        let callStatusInterval = null;     // ADD THIS LINE
+
+        
 
         // Tab switching
         document.querySelectorAll('.tab').forEach(tab => {
@@ -592,6 +597,11 @@
                     document.getElementById('directCallBtn').style.display = 'none';
                     document.getElementById('directHangupBtn').style.display = 'block';
                     addToCallHistory(phoneNumber, 'Direct');
+
+                    // ADD THESE TWO LINES:
+                    currentCallSid = data.call_sid;
+                    startCallStatusPolling();
+
                 } else {
                     showStatus(`Error: ${data.error}`, 'error');
                     document.getElementById('directCallBtn').disabled = false;
@@ -604,6 +614,7 @@
 
         // Direct Hangup Button
         document.getElementById('directHangupBtn').addEventListener('click', () => {
+            stopCallStatusPolling();  // ADD THIS LINE for updated end call in UI
             showStatus('Call ended', 'info');
             resetDirectCallUI();
         });
@@ -642,6 +653,11 @@
                     document.getElementById('bridgeCallBtn').style.display = 'none';
                     document.getElementById('bridgeHangupBtn').style.display = 'block';
                     addToCallHistory(phoneNumber, 'Bridge');
+
+                    // ADD THESE TWO LINES:
+                    currentCallSid = data.call_sid;
+                    startCallStatusPolling();
+
                 } else {
                     showStatus(`Error: ${data.error}`, 'error');
                     document.getElementById('bridgeCallBtn').disabled = false;
@@ -654,6 +670,7 @@
 
         // Bridge Hangup Button
         document.getElementById('bridgeHangupBtn').addEventListener('click', () => {
+            stopCallStatusPolling();  // ADD THIS LINE
             showStatus('Call ended', 'info');
             resetBridgeCallUI();
         });
@@ -708,6 +725,48 @@
             localStorage.setItem('callHistory', JSON.stringify(callHistory));
             displayCallHistory();
         }
+
+        // Call status polling functions
+        function startCallStatusPolling() {
+            console.log('Starting call status polling for:', currentCallSid);
+            
+            // Clear any existing interval
+            stopCallStatusPolling();
+            
+            // Poll every 2 seconds
+            callStatusInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/get-call-status?call_sid=${currentCallSid}`);
+                    const data = await response.json();
+                    
+                    console.log('Call status:', data.status);
+                    
+                    if (data.status === 'completed' || data.status === 'failed' || data.status === 'busy' || data.status === 'no-answer') {
+                        console.log('Call ended, resetting UI');
+                        showStatus('Call ended', 'info');
+                        stopCallStatusPolling();
+                        
+                        // Reset the appropriate UI based on which tab is active
+                        if (document.getElementById('direct-tab').classList.contains('active')) {
+                            resetDirectCallUI();
+                        } else if (document.getElementById('bridge-tab').classList.contains('active')) {
+                            resetBridgeCallUI();
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error polling call status:', error);
+                }
+            }, 2000);
+        }
+
+        function stopCallStatusPolling() {
+            if (callStatusInterval) {
+                clearInterval(callStatusInterval);
+                callStatusInterval = null;
+                currentCallSid = null;
+            }
+        }
+
 
         function displayCallHistory() {
             const list = document.getElementById('callHistoryList');

@@ -191,6 +191,28 @@ def call_status():
     
     return '', 200
 
+@app.route('/get-call-status', methods=['GET'])
+def get_call_status():
+    """Get the current status of a call"""
+    try:
+        call_sid = request.args.get('call_sid')
+        
+        if not call_sid:
+            return jsonify({'error': 'call_sid is required'}), 400
+        
+        # Fetch call status from Twilio
+        call = client.calls(call_sid).fetch()
+        
+        return jsonify({
+            'call_sid': call.sid,
+            'status': call.status,
+            'duration': call.duration
+        })
+    
+    except Exception as e:
+        print(f"Error fetching call status: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/token', methods=['GET'])
 def token():
     """Generate Twilio Client token for browser calling"""
