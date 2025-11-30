@@ -6,8 +6,6 @@ import modal
 import fasthtml.common as fh
 import inflect
 
-# from .constants import N_CHECKBOXES
-
 N_CHECKBOXES=1000
 
 app = modal.App("fasthtml-checkboxes")
@@ -17,14 +15,8 @@ css_path_local = Path(__file__).parent / "style.css"
 css_path_remote = "/assets/styles.css"
 
 @app.function(
-    image = modal.Image.debian_slim(python_version="3.12")
-    .pip_install("python-fasthtml==0.12.35", "inflect~=7.4.0")
-#     concurrency_limit=1,#currently maintain state in memory, so we restrict the server to one worker
-#     mounts = [
-#         modal.Mount.from_local_dir(local_path=str(css_path_local),remote_path=css_path_remote)
-#     ],
-#     allow_concurrent_inputs=1000,
-# )
+    image = modal.Image.debian_slim(python_version="3.12").pip_install(
+        "python-fasthtml==0.12.35", "inflect~=7.4.0")
     .add_local_file(css_path_local,remote_path=css_path_remote),
     max_containers=1,
 )
@@ -44,19 +36,8 @@ def web():
         print("Restored checkboxes state from previous session.")
     else:
         print("Initializing checkbox state.")
-        checkboxes = [False]*N_CHECKBOXES
-        # checkboxes =[]
-        # for i in range(N_CHECKBOXES):
-        #     checkboxes.append(
-        #         fh.Input(
-        #             id=f"cb-{i}",
-        #             type="checkbox",
-        #             checked=False,
-        #             # when clicked, that checkbox will send a POST request to the server with its index
-        #             hx_post=f"/checkbox/toggle/{i}",
-        #             hx_swap_oob="true",# allows us to later push diffs to arbitrary checkboxes by id
-        #         )
-        #     )
+        checkboxes = [False] * N_CHECKBOXES
+    
     async def on_shutdown():
         # Handle the shutdown event by persisting current state to modal dict
         async with checkboxes_mutex:
@@ -89,11 +70,9 @@ def web():
             fh.Titled(f"{N_CHECKBOXES // 1000}k Checkboxes"),
             fh.Main(
                 fh.H1(
-                    f"{inflect.engine().number_to_words(N_CHECKBOXES).title()} Checkboxes"
-                ),
-                fh.Div(
-                    *checkboxes,id="checkbox-array",
-                ),
+                    f"{inflect.engine().number_to_words(N_CHECKBOXES).title()} Checkboxes"),
+                fh.Div( *checkbox_array,
+                       id="checkbox-array",),
                 cls="container",
                 # use HTMX to poll for diffs to apply
                 hx_trigger="every 1s", #poll every second
@@ -101,15 +80,11 @@ def web():
                 hx_swap="none", #dont replace the entire page
             ),
         )
-    
     #users submitting checkbox toggles
     @app.post("/checkbox/toggle/{i}/{client_id}")
     async def toggle(i:int,client_id:str):
         async with checkboxes_mutex:
             checkboxes[i]= not checkboxes[i]
-            # cb = checkboxes[i]
-            # cb.checked = not cb.checked
-            # checkboxes[i]=cb
         
         async with clients_mutex:
             expired = []
@@ -142,13 +117,12 @@ def web():
             diffs = client.pull_diffs()
 
         async with checkboxes_mutex:
-            #diff_array = [checkboxes[i] for i in diffs]
             diff_array = [
                 fh.CheckboxX(
                     id=f"cb-{i}",
                     checked= checkboxes[i],
                     # when clicked, that checkbox will send a POST request to the server with its index
-                    hx_post=f"/checkbox/toggle/{i}",
+                    hx_post=f"/checkbox/toggle/{i}/{client_id}",
                     hx_swap_oob="true",# allows us to later push diffs to arbitrary checkboxes by id
                 )
                 for i in diffs
