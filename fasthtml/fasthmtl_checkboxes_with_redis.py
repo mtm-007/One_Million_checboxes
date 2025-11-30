@@ -3,13 +3,17 @@ from asyncio import Lock
 from pathlib import Path
 from uuid import uuid4
 import modal
+import redis
 import fasthtml.common as fh
 import inflect
 
-N_CHECKBOXES=10000
+N_CHECKBOXES=1000000
 
 app = modal.App("fasthtml-checkboxes")
 db = modal.Dict.from_name("fasthtml-checkboxes-db", create_if_missing=True)
+
+#Redis config
+r = redis.Redis(host="localhost", port=6379, db=0, decode_response=True)
 
 css_path_local = Path(__file__).parent / "style.css"
 css_path_remote = "/assets/styles.css"
@@ -25,24 +29,26 @@ css_path_remote = "/assets/styles.css"
 @modal.asgi_app()
 def web():
 
+    global redis
+    if redis is None:
+        #initialize
+        redis=aioredis.from_url(REDIS_URL,decode_response=True)
+
     #connected clients are tracked in memory
     clients = {}
     clients_mutex = Lock()
-    #keep all checkbox states in memory during operation, and persist to modal dict across restarts
-    checkboxes = db.get("checkboxes", [])
     checkboxes_mutex = Lock()
 
-    if len(checkboxes) == N_CHECKBOXES:
-        print("Restored checkboxes state from previous session.")
-    else:
-        print("Initializing checkbox state.")
-        checkboxes = [False] * N_CHECKBOXES
-    
+    #initialize redis if empty
+    if r.dbsize()==0:
+        pipe = r.pipeline()
+        for i in range(N_CHECKBOXES):
+            pipe.set(f"cb:{i}",0) #unchecked
+        pipe.execute()
+        print("Initialized {N_CHECKBOXES} checkboxes in Redis.")
+            
     async def on_shutdown():
-        # Handle the shutdown event by persisting current state to modal dict
-        async with checkboxes_mutex:
-            db["checkboxes"]=checkboxes
-        print("checkbox state persisted.")
+        print("checkbox state persisted in Redis (already live).")
     
     style= open(css_path_remote, "r").read()
     app, _ = fh.fast_app(
@@ -56,23 +62,12 @@ def web():
         async with  clients_mutex:
             clients[client.id] =client
 
-        checkbox_array = [ 
-            fh.CheckboxX(
-                id=f"cb-{i}",
-                checked= val,
-                # when clicked, that checkbox will send a POST request to the server with its index
-                hx_post=f"/checkbox/toggle/{i}/{client.id}",  
-            )
-                for i,val in enumerate(checkboxes)
-            ]
-        
         return(
             fh.Titled(f"{N_CHECKBOXES // 1000}k Checkboxes"),
             fh.Main(
                 fh.H1(
                     f"{inflect.engine().number_to_words(N_CHECKBOXES).title()} Checkboxes"),
-                fh.Div( *checkbox_array,
-                       id="checkbox-array",),
+                fh.Div( id="checkbox-array",),
                 cls="container",
                 # use HTMX to poll for diffs to apply
                 hx_trigger="every 1s", #poll every second
@@ -82,25 +77,23 @@ def web():
         )
     #users submitting checkbox toggles
     @app.post("/checkbox/toggle/{i}/{client_id}")
-    async def toggle(i:int,client_id:str):
-        async with checkboxes_mutex:
-            checkboxes[i]= not checkboxes[i]
+    async def toggle(i:int):
+        #flip the checkbox state in Redis
+        current = int(r.get(f"cb:{i}") or 0)
+        r.set(f"cb:{i}", 1 if current ==0 else 0)
         
+        #notify clients
         async with clients_mutex:
             expired = []
             for client in clients.values():
-                if client.id == client_id:
-                    #ignore self; keep our own diffs
-                    continue
-                #clean up old clients
                 if not client.is_active():
                     expired.append(client.id)
-                
+                else:
                 #add diff to client fpr when they next poll
-                client.add_diff(i)
+                    client.add_diff(i)
 
-            for client_id in expired:
-                del clients[client_id]
+            for cid in expired:
+                del clients[cid]
         return
     
     #clients polling for outstanding diffs
@@ -114,19 +107,22 @@ def web():
                 return
             
             client.heartbeat()
-            diffs = client.pull_diffs()
+            diffs_idx = client.pull_diffs()
 
-        async with checkboxes_mutex:
-            diff_array = [
-                fh.CheckboxX(
-                    id=f"cb-{i}",
-                    checked= checkboxes[i],
-                    # when clicked, that checkbox will send a POST request to the server with its index
-                    hx_post=f"/checkbox/toggle/{i}/{client_id}",
-                    hx_swap_oob="true",# allows us to later push diffs to arbitrary checkboxes by id
+            diff_array = []
+            for i in diffs_idx:
+                state = int(r.get(f"cb:{i}") or 0)
+                diff_array.append(
+                    fh.Input(
+                        id=f"cb-{i}",
+                        type= "checkboxes",
+                        checked=bool(state),
+                        # when clicked, that checkbox will send a POST request to the server with its index
+                        hx_post=f"/checkbox/toggle/{i}",
+                        hx_swap_oob="true",# allows us to later push diffs to arbitrary checkboxes by id
                 )
-                for i in diffs
-            ]
+            )
+                
         return diff_array
     
     return app

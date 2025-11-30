@@ -1,3 +1,4 @@
 python-fasthtml==0.12.35
 inflect~=7.4.0
 modal
+redis
