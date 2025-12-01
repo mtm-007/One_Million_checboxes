@@ -1,4 +1,5 @@
 python-fasthtml==0.12.35
+MonsterUI
 inflect~=7.4.0
 modal
 redis
