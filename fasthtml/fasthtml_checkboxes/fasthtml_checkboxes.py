@@ -249,7 +249,6 @@ def web():
             fh.Tr(
                 fh.Td(v["ip"]),
                 fh.Td(v["city"] or "-"),
-                fh.Td(v["region"] or "-"),
                 fh.Td(v["country"] or "-"),
                 fh.Td(time.strftime("%H:%M:%S", time.localtime(v["timestamp"]))),
             )
@@ -262,7 +261,6 @@ def web():
                 fh.Tr(
                     fh.Th("IP"),
                     fh.Th("City"),
-                    fh.Th("Region"),
                     fh.Th("Country"),
                     fh.Th("Time"),
                 ),
