@@ -15,6 +15,8 @@ db = modal.Dict.from_name("fasthtml-checkboxes-db", create_if_missing=True)
 #new: Modal dict for caching IP geolocation results
 geo_cache = modal.Dict.from_name("ip-geo-cache", create_if_missing=True)
 
+recent_visitors = modal.Dict.from_name("fasthtml-recent-visitors", create_if_missing=True)
+
 #New geolocation helper function
 async def get_geo(ip:str):
     """Return geo info from ip using cache + fallback providers"""
@@ -43,8 +45,25 @@ async def get_geo(ip:str):
                 return data
     except Exception:
         pass
+    #last resort 
+    data = {"ip": ip, "city": None, "country": None}
     #if all fail
     return {"error": "lookup_failed"}
+
+async def record_visitors(ip,user_agent, geo):
+    entry = {
+        "ip": ip,
+        "user_agent": user_agent[:120],
+        "city": geo.get("city"),
+        "country": geo.get("country") or geo.get("country_name"),
+        "timestamp": time.time(),
+    }
+
+    #keep the last 100
+    visitors = recent_visitors.get("list", [])
+    visitors.append(entry)
+    visitors = visitors[-100:]
+    recent_visitors["list"] = visitors
 
 
 css_path_local = Path(__file__).parent / "style.css"
@@ -74,7 +93,7 @@ def get_real_ip(request):
 
 @app.function(
     image = modal.Image.debian_slim(python_version="3.12").pip_install(
-        "python-fasthtml==0.12.35", "inflect~=7.4.0")
+        "python-fasthtml==0.12.35", "inflect~=7.4.0", "httpx==0.27.0")
     .add_local_file(css_path_local,remote_path=css_path_remote),
     max_containers=1,
 )
@@ -107,6 +126,7 @@ def web():
         on_shutdown=[on_shutdown],
         hdrs=[fh.Style(style)],
     )
+    
     @app.get("/")
     async def get(request):
         #log IP address
@@ -115,6 +135,8 @@ def web():
 
         #geo location look up
         geo = await get_geo(client_ip)
+        await record_visitors(client_ip, user_agent, geo)
+        
         city = geo.get("city")
         country = geo.get("country_name") or geo.get("country")
         isp = geo.get("org") or geo.get("isp")
@@ -156,12 +178,13 @@ def web():
         user_agent = request.headers.get('user-agent', 'unknown')
 
         geo = await get_geo(client_ip)
+        await record_visitors(client_ip, user_agent, geo)
         city = geo.get("city")
         country = geo.get("country_name") or geo.get("country")
         isp = geo.get("org") or geo.get("isp")
         print(
             f"[TOGGLE] Checkbox {i} toggled by {client_id[:8]} | Checkbox {i} |"
-            f"IP: {client_ip} | {city}, {country} | ISP: {isp} - UserAg: {user_agent[:50]}...")
+            f"IP: {client_ip} | {city}, {country} | ISP: {isp} - User-Agent: {user_agent[:50]}...")
 
         async with checkboxes_mutex:
             checkboxes[i]= not checkboxes[i]
@@ -218,6 +241,35 @@ def web():
                 for i in diffs
             ]
         return diff_array
+    @app.get("/visitors")
+    async def visitors_page(request):
+        visitors = recent_visitors.get("list", [])
+
+        rows = [
+            fh.Tr(
+                fh.Td(v["ip"]),
+                fh.Td(v["city"] or "-"),
+                fh.Td(v["region"] or "-"),
+                fh.Td(v["country"] or "-"),
+                fh.Td(time.strftime("%H:%M:%S", time.localtime(v["timestamp"]))),
+            )
+            for v in reversed(visitors)
+        ]
+
+        return fh.Main(
+            fh.H1("Recent Visitors"),
+            fh.Table(
+                fh.Tr(
+                    fh.Th("IP"),
+                    fh.Th("City"),
+                    fh.Th("Region"),
+                    fh.Th("Country"),
+                    fh.Th("Time"),
+                ),
+                *rows,
+                cls="table"
+            )
+        )
     
     return app
 
