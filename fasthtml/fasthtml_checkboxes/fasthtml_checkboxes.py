@@ -95,7 +95,7 @@ def get_real_ip(request):
 
 @app.function(
     image = modal.Image.debian_slim(python_version="3.12").pip_install(
-        "python-fasthtml==0.12.35", "inflect~=7.4.0", "httpx==0.27.0")
+        "python-fasthtml==0.12.35", "inflect~=7.4.0", "httpx==0.27.0", "requests>=2.31.0,<3")
     .add_local_file(css_path_local,remote_path=css_path_remote),
     max_containers=1,
 )
