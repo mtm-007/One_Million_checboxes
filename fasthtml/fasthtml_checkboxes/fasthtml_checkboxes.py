@@ -29,7 +29,7 @@ def get_real_ip(request):
         #X-forwarded can cantain multiple IPs, first one is the client
         return forwarded_for.split(',')[0].strip()
     
-    real_ip = request.headers.get('X-Real_IP')
+    real_ip = request.headers.get('X-Real-IP')
     if real_ip:
         return real_ip
     
@@ -73,6 +73,8 @@ def web():
     )
     @app.get("/")
     async def get(request):
+        #temporarily log all headers
+        print(f"[DEBUG] All headers: {dict(request.headers)}")
         #log IP address
         client_ip = get_real_ip(request)
         print(f"[HOME] New Client connected - IP: {client_ip}")
