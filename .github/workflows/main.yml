@@ -33,10 +33,11 @@ jobs:
 
 
             - name: Deploy 10k Checkboxes app
-              run: modal deploy fasthtml.fasthtml_checkboxes.fasthtml_checkboxes.py --name fasthtml-checkboxes
+              env:
+                MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }} 
+                MODAL_TOKEN_SECRET:  ${{ secrets.MODAL_TOKEN_SECRET }} 
 
+              run: |
+                cd fasthtml/fasthtml_checkboxes
+                modal deploy fasthtml_checkboxes.py --name fasthtml-checkboxes
 
-            - name: Print URL
-              run: modal app get fasthtml-checkboxes | grep -i https
-            
-        
