@@ -14,6 +14,22 @@ db = modal.Dict.from_name("fasthtml-checkboxes-db", create_if_missing=True)
 css_path_local = Path(__file__).parent / "style.css"
 css_path_remote = "/assets/styles.css"
 
+
+#helper function for ip address
+def get_real_ip(request):
+    """get real client IP,accounting for proxies"""
+    forwarded_for = request.headers.get('X-Forwarded-For')
+    if forwarded_for:
+        #X-forwarded can cantain multiple IPs, first one is the client
+        return forwarded_for.split(',')[0].strip()
+    
+    real_ip = request.headers.get('X-Real_IP')
+    if real_ip:
+        return real_ip
+    
+    #fallback to direct client host 
+    return request.client.host
+
 @app.function(
     image = modal.Image.debian_slim(python_version="3.12").pip_install(
         "python-fasthtml==0.12.35", "inflect~=7.4.0")
@@ -50,7 +66,11 @@ def web():
         hdrs=[fh.Style(style)],
     )
     @app.get("/")
-    async def get():
+    async def get(request):
+        #log IP address
+        client_ip = get_real_ip(request)
+        print(f"[HOME] New Client connected - IP: {client_ip}")
+
         #register a new client
         client = Client()
         async with  clients_mutex:
@@ -82,7 +102,10 @@ def web():
         )
     #users submitting checkbox toggles
     @app.post("/checkbox/toggle/{i}/{client_id}")
-    async def toggle(i:int,client_id:str):
+    async def toggle(request, i:int,client_id:str):
+        client_ip = get_real_ip(request)
+        print(f"[TOGGLE] Checkbox {i} toggled by {client_id[:8]}... - IP: {client_ip}")
+
         async with checkboxes_mutex:
             checkboxes[i]= not checkboxes[i]
         
@@ -105,7 +128,7 @@ def web():
     
     #clients polling for outstanding diffs
     @app.get("/diffs/{client_id}")
-    async def diffs(client_id:str):
+    async def diffs(request, client_id:str):
         # we use the `hx_swap_oob='true'` feature to
         # push updates only for the checkboxes that changed
         async with clients_mutex:
@@ -115,6 +138,9 @@ def web():
             
             client.heartbeat()
             diffs = client.pull_diffs()
+        
+        client_ip = get_real_ip(request)
+        print(f"[DIFFS] Sending {len(diffs)} diffs to {client_id[:8]}... -IP: {client_ip}")
 
         async with checkboxes_mutex:
             diff_array = [
