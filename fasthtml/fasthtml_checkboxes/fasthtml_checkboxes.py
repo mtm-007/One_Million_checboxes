@@ -6,6 +6,7 @@ import modal
 import fasthtml.common as fh
 import inflect
 import httpx
+import requests
 
 N_CHECKBOXES=10000
 
@@ -46,7 +47,7 @@ async def get_geo(ip:str):
     except Exception:
         pass
     #last resort 
-    data = {"ip": ip, "city": None, "country": None}
+    data = {"ip": ip, "city": None, "country": None, "zip":None}
     #if all fail
     return {"error": "lookup_failed"}
 
@@ -55,6 +56,7 @@ async def record_visitors(ip,user_agent, geo):
         "ip": ip,
         "user_agent": user_agent[:120],
         "city": geo.get("city"),
+        "zip": geo.get("postal") or geo.get("zip"),
         "country": geo.get("country") or geo.get("country_name"),
         "timestamp": time.time(),
     }
@@ -138,9 +140,10 @@ def web():
         await record_visitors(client_ip, user_agent, geo)
         
         city = geo.get("city")
+        zip = geo.get('postal')
         country = geo.get("country_name") or geo.get("country")
         isp = geo.get("org") or geo.get("isp")
-        print(f"[HOME] New Client connected - IP: {client_ip} | {city}, {country} | ISP: {isp} - User-Agent: {user_agent[:80]}...")
+        print(f"[HOME] New Client connected - IP: {client_ip} | {city}, {zip}, {country} | ISP: {isp} |- User-Agent: {user_agent[:80]}...")
 
         #register a new client
         client = Client()
@@ -180,11 +183,12 @@ def web():
         geo = await get_geo(client_ip)
         await record_visitors(client_ip, user_agent, geo)
         city = geo.get("city")
+        zip = geo.get('postal')
         country = geo.get("country_name") or geo.get("country")
         isp = geo.get("org") or geo.get("isp")
         print(
             f"[TOGGLE] Checkbox {i} toggled by {client_id[:8]} | Checkbox {i} |"
-            f"IP: {client_ip} | {city}, {country} | ISP: {isp} - User-Agent: {user_agent[:50]}...")
+            f"IP: {client_ip} | {city}, {zip}, {country} | ISP: {isp} | - User-Agent: {user_agent[:50]}...")
 
         async with checkboxes_mutex:
             checkboxes[i]= not checkboxes[i]
@@ -222,11 +226,12 @@ def web():
         client_ip = get_real_ip(request)
         geo = await get_geo(client_ip)
         city = geo.get("city")
+        zip = geo.get('postal')
         country = geo.get("country_name") or geo.get("country")
         isp = geo.get("org") or geo.get("isp")
         print(
             f"[DIFFS] Sending {len(diffs)} diffs to {client_id[:8]}| IP: {client_ip} |"
-            f"{city}, {country} | diff sent"
+            f"{city}, {zip}, {country}, | diff sent"
             )
 
         async with checkboxes_mutex:
@@ -249,6 +254,7 @@ def web():
             fh.Tr(
                 fh.Td(v["ip"]),
                 fh.Td(v["city"] or "-"),
+                fh.Td(v["zip"] or "-"),
                 fh.Td(v["country"] or "-"),
                 fh.Td(time.strftime("%H:%M:%S", time.localtime(v["timestamp"]))),
             )
@@ -261,6 +267,7 @@ def web():
                 fh.Tr(
                     fh.Th("IP"),
                     fh.Th("City"),
+                    fh.Th("zip"),
                     fh.Th("Country"),
                     fh.Th("Time"),
                 ),
