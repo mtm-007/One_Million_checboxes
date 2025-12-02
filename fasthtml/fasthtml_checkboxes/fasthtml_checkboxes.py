@@ -5,11 +5,47 @@ from uuid import uuid4
 import modal
 import fasthtml.common as fh
 import inflect
+import httpx
 
 N_CHECKBOXES=10000
 
 app = modal.App("fasthtml-checkboxes")
 db = modal.Dict.from_name("fasthtml-checkboxes-db", create_if_missing=True)
+
+#new: Modal dict for caching IP geolocation results
+geo_cache = modal.Dict.from_name("ip-geo-cache", create_if_missing=True)
+
+#New geolocation helper function
+async def get_geo(ip:str);
+    """Return geo info from ip using cache + fallback providers"""
+    #check cache first
+    if ip in geo_cache:
+        return geo_cache[ip]
+    #primary provider
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"https://ipapi.co/{ip}/json/")
+        if r.status_code == 200:
+            data = r.json()
+            if "country_name" in data:
+                geo_cache[ip] = data
+                return data
+    except Exception:
+        pass
+    #Fallback provider
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"http://ip-api.com/json/{ip}")
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("status") == "success":
+                geo_cache[ip] = data
+                return data
+    except Exception:
+        pass
+    #if all fail
+    return {"error": "lookup_failed"}
+
 
 css_path_local = Path(__file__).parent / "style.css"
 css_path_remote = "/assets/styles.css"
@@ -76,7 +112,13 @@ def web():
         #log IP address
         client_ip = get_real_ip(request)
         user_agent = request.headers.get('user-agent', 'unknown')
-        print(f"[HOME] New Client connected - IP: {client_ip} - User-Agent: {user_agent[:80]}...")
+
+        #geo location look up
+        geo = await get_geo(client_ip)
+        city = geo.get("city")
+        country = geo.get("country_name") or geo.get("country")
+        isp = geo.get("org") or geo.get("isp")
+        print(f"[HOME] New Client connected - IP: {client_ip} | {city}, {country} | ISP: {isp} - User-Agent: {user_agent[:80]}...")
 
         #register a new client
         client = Client()
@@ -112,7 +154,14 @@ def web():
     async def toggle(request, i:int,client_id:str):
         client_ip = get_real_ip(request)
         user_agent = request.headers.get('user-agent', 'unknown')
-        print(f"[TOGGLE] Checkbox {i} toggled by {client_id[:8]}... - IP: {client_ip} - UserAg: {user_agent[:50]}...")
+
+        geo = await get_geo(client_ip)
+        city = geo.get("city")
+        country = geo.get("country_name") or geo.get("country")
+        isp = geo.get("org") or geo.get("isp")
+        print(
+            f"[TOGGLE] Checkbox {i} toggled by {client_id[:8]} | Checkbox {i} |"
+            f"IP: {client_ip} | {city}, {country} | ISP: {isp} - UserAg: {user_agent[:50]}...")
 
         async with checkboxes_mutex:
             checkboxes[i]= not checkboxes[i]
@@ -148,7 +197,14 @@ def web():
             diffs = client.pull_diffs()
         
         client_ip = get_real_ip(request)
-        print(f"[DIFFS] Sending {len(diffs)} diffs to {client_id[:8]}... -IP: {client_ip}")
+        geo = await get_geo(client_ip)
+        city = geo.get("city")
+        country = geo.get("country_name") or geo.get("country")
+        isp = geo.get("org") or geo.get("isp")
+        print(
+            f"[DIFFS] Sending {len(diffs)} diffs to {client_id[:8]}| IP: {client_ip} |"
+            f"{city}, {country} | diff sent"
+            )
 
         async with checkboxes_mutex:
             diff_array = [
