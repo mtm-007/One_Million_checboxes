@@ -14,7 +14,11 @@ from redis.asyncio import Redis
 
 N_CHECKBOXES=10000
 
-redis_sidecar = modal.Image.debian_slim().pip_install("redis>=5.3.0").run_redis()
+redis_sidecar = modal.Sidecar(
+    name="redis-sidecar",
+    image = modal.Image.debian_slim().pip_install("redis>=5.3.0"),
+    ports={6379: 6379},
+    )
 
 REDIS_URL = f"redis://{redis_sidecar.hostname}:6379"
 redis = Redis.from_url(REDIS_URL)
