@@ -14,14 +14,8 @@ from redis.asyncio import Redis
 
 N_CHECKBOXES=10000
 
-redis_sidecar = modal.Sidecar(
-    name="redis-sidecar",
-    image = modal.Image.debian_slim().pip_install("redis>=5.3.0"),
-    ports={6379: 6379},
-    )
-
-REDIS_URL = f"redis://{redis_sidecar.hostname}:6379"
-redis = Redis.from_url(REDIS_URL)
+redis_sidecar_image = modal.Image.debian_slim().pip_install("redis>=5.3.0")
+#sidecar = redis_sidecar_image.run_container(name="redis-sidecar")
 
 app = modal.App("fasthtml-checkboxes")
 
@@ -123,12 +117,16 @@ image = modal.Image.debian_slim(python_version="3.12").pip_install(
     image = image
     .add_local_file(css_path_local,remote_path=css_path_remote),
     max_containers=1,
-    sidecars = [redis_sidecar],
+    sidecars = [redis_sidecar_image.run_container(name="redis-sidecar")],
 )
 
 @modal.concurrent(max_inputs=1000)
 @modal.asgi_app()
 def web():
+    redis_sidecar = modal.get_running_sidecar("redis-sidecar")
+    REDIS_URL = f"redis://{redis_sidecar.hostname}:6379"
+    redis = Redis.from_url(REDIS_URL)
+
     async def init_checkboxes():
         #checkboxes_key = "checkboxes"
         exists = await redis.exists(checkboxes_key)
