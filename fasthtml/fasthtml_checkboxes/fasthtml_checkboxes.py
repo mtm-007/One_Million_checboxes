@@ -15,7 +15,7 @@ from redis.asyncio import Redis
 
 N_CHECKBOXES=10000
 
-redis_image = (Image.debian_slim(python_version="3.12").apt_install("redis-server"))
+redis_image = Image.debian_slim(python_version="3.12").apt_install("redis-server")
 
 app = modal.App("fasthtml-checkboxes")
 
@@ -24,7 +24,7 @@ clients = {}
 clients_mutex = Lock()
 
 #New geolocation helper function
-async def get_geo(ip:str,redis):
+async def get_geo(ip:str, redis):
     """Return geo info from ip using cache + fallback providers"""
     #check cache first
     cached = await redis.get(f"geo:{ip}")
@@ -59,7 +59,7 @@ async def get_geo(ip:str,redis):
     #if all fail
     return data
 
-async def record_visitors(ip,user_agent, geo, redis):
+async def record_visitors(ip, user_agent, geo, redis):
     #use hash for faster loopups
     visitors_key = f"visitor:{ip}"
 
@@ -115,7 +115,7 @@ app_image = (
 def web():
     
     redis_process = subprocess.Popen(
-        ["redis-server", "--protect-mode", "no","--bind","127.0.0.1", "--port", "6379"],
+        ["redis-server", "--protected-mode", "no","--bind","127.0.0.1", "--port", "6379"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
     )
@@ -123,7 +123,7 @@ def web():
     time.sleep(2)
 
     redis = Redis.from_url("redis://127.0.0.1:6379")
-    print("Redis sidecar started succesfully")
+    print("Redis server started succesfully")
 
 
     async def init_checkboxes():
@@ -133,7 +133,7 @@ def web():
             print("initialized checkboxes in Redis")
 
     async def on_shutdown():
-        print("Redis-backed checkbox state persisted automatically.")
+        print("Shutting down...")
         await redis.close() #not necessarily needed here just best practice
         redis_process.terminate()
         redis_process.wait()
@@ -305,7 +305,7 @@ def web():
         visitors = []
         
         for ip in recent_ips:
-            ip_str = str(ip, 'utf-8')
+            ip_str = ip.decode('utf-8') if isinstance(ip, bytes) else str(ip)
             visitors_raw = await redis.get(f"visitor:{ip_str}")
             if visitors_raw:
                 v = json.loads(visitors_raw)
@@ -329,7 +329,7 @@ def web():
                 fh.Tr(
                     fh.Th("IP"),
                     fh.Th("City"),
-                    fh.Th("zip"),
+                    fh.Th("Zip"),
                     fh.Th("Country"),
                     fh.Th("Time"),
                 ),
@@ -359,5 +359,5 @@ class Client:
     def pull_diffs(self):
         #return a copy of the diffs and clear them
         diffs = self.diffs
-        self.diffs=[]
+        self.diffs = []
         return diffs
