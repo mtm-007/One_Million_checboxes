@@ -30,6 +30,7 @@ input:not([type=submit], [type=button], [type=reset], [type=range], [type=file],
     gap: 6px;
     max-width: 1400px;
     margin: 2rem auto;
+    justify-content: center;
   }
   .cb {
     width: 18px;

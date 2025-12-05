@@ -251,7 +251,7 @@ def web():
 
         #return page fast (no blocking by geo logging API) 
         return(
-            fh.Titled(f"{N_CHECKBOXES // 1000}k Checkboxes"),
+            fh.Titled(f"{N_CHECKBOXES}k Checkboxes"),
             fh.Main(
                 fh.H1(
                     f"{inflect.engine().number_to_words(N_CHECKBOXES).title()} Checkboxes"),
