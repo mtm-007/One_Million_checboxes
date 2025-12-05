@@ -1,3 +1,4 @@
+
 import time
 from asyncio import Lock
 from pathlib import Path
@@ -10,7 +11,6 @@ import httpx
 import asyncio
 import json
 import subprocess
-import threading
 from redis.asyncio import Redis
 
 
@@ -26,27 +26,13 @@ clients_mutex = Lock()
 
 checkbox_cache = None
 checkbox_cache_loaded_at = 0.0
-checkbox_cache_lock = Lock()
-CHECKBOX_CACHE_TTL =  300 #60 * 10 #keep for 10 minutes in memory
+CHECKBOX_CACHE_TTL = 5 #60 * 10 #keep for 10 minutes in memory
+
+def make_hx_post(i, client_id):
+    return f"/checkbox/toggle/{i}/{client_id}"
 
 GEO_TTL_REDIS = 86400 
 CLIENT_GEO_TTL = 30.0  #client level in memory small cache (30s)
-
-#background geo logging(non blocking page loading)
-async def background_geo_logging(client_ip, user_agent, redis):
-    """Run geo lookup in background without blocking page load"""
-    try:
-        geo = await get_geo(client_ip, redis)
-        await record_visitors(client_ip,user_agent, geo, redis)
-
-        city = geo.get("city")
-        zip_code = geo.get('postal') or geo.get("zip")
-        country = geo.get("country_name") or geo.get("country")
-        isp = geo.get("org") or geo.get("isp")
-        print(
-            f"[GEO] {client_ip} | {city}, {zip_code}, {country} | ISP: {isp}")
-    except Exception as e:
-        print(f"[GEO ERROR] {client_ip}: {e}")
 
 #New geolocation helper function
 async def get_geo_from_providers(ip:str, redis):
@@ -76,16 +62,16 @@ async def get_geo_from_providers(ip:str, redis):
     #last resort 
     return {"ip": ip, "city": None, "country": None, "zip": None}
 
-async def get_geo(ip: str, redis):
+async def get_geo(ip: str, redis_client: Redis):
     """Return geo info from ip using cache + fallback providers"""
-    cached = await redis.get(f"geo:{ip}")
+
+    cached = await redis_client.get(f"geo:{ip}")
     if cached:
         return json.loads(cached)
-
     #fetch from providers and cache
-    data = await get_geo_from_providers(ip,redis)
+    data = await get_geo_from_providers(ip)
     try:
-        await redis.set(f"geo:{ip}", json.dumps(data), ex=GEO_TTL_REDIS)
+        await redis_client.set(f"geo:{ip}", json.dumps(data), ex=GEO_TTL_REDIS)
     except Exception:
         pass
     return data
@@ -134,38 +120,6 @@ def get_real_ip(request):
     #fallback to direct client host 
     return request.client.host
 
-
-class Client:
-    def __init__(self):
-        self.id = str(uuid4())
-        self.diffs = []
-        self.inactive_deadline = time.time() + 30
-        self.geo = None
-        self.geo_ts = 0.0
-    
-    def is_active(self):
-        return time.time() < self.inactive_deadline
-    
-    def heartbeat(self):
-        self.inactive_deadline = time.time() + 30
-
-    def add_diff(self, i):
-        if i not in self.diffs:
-            self.diffs.append(i)
-
-    def pull_diffs(self):
-        #return a copy of the diffs and clear them
-        diffs = self.diffs
-        self.diffs = []
-        return diffs
-    def set_geo(self, geo_obj, now=None):
-        self.geo = geo_obj
-        self.geo_ts = now or time.time()
-
-    def has_recent_geo(self, now=None):
-        now = now or time.time()
-        return (self.geo is not None) and ((now - self.geo_ts) <= CLIENT_GEO_TTL)
-
 app_image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("python-fasthtml==0.12.35", "inflect~=7.4.0", "httpx==0.27.0" ,"redis>=5.3.0")
@@ -181,18 +135,18 @@ app_image = (
 @modal.concurrent(max_inputs=1000)
 @modal.asgi_app()
 def web():
+    # ---------------------------
     # Start redis server locally inside the container (persisted to volume)
-
+    # ---------------------------
     redis_process = subprocess.Popen(
-        [   
-            "redis-server", 
-            "--protected-mode", "no",
-            "--bind","127.0.0.1", 
-            "--port", "6379", 
-            "--dir", "/data", #store data in persistent volume
-            "--save", "86400", "1", #save once per day
-            "--save", "" ] #disable all other automatic saves
-            ,
+        ["redis-server", 
+         "--protected-mode", "no",
+         "--bind","127.0.0.1", 
+         "--port", "6379", 
+         "--dir", "/data", #store data in persistent volume
+         "--save", "86400", "1", #save once per day
+         "--save", "" ] #disable all other automatic saves
+        ,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
     )
@@ -205,34 +159,14 @@ def web():
     async def init_checkboxes():
         global checkbox_cache, checkbox_cache_loaded_at
 
-        #use lock to prevent multiple simultaneous loads
-        async with checkbox_cache_lock:
-            #check again inside lock in case another request just loaded it
-            #if checkbox_cache is None or time.time() - checkbox_cache_loaded_at > CHECKBOX_CACHE_TTL:
-            if checkbox_cache is not None and (time.time() - checkbox_cache_loaded_at)<= CHECKBOX_CACHE_TTL:
-                return checkbox_cache
-
-            print(f"[CACHE] Loading checkboxes from redis...")
-            start = time.time()
-
+        if checkbox_cache is None or time.time() - checkbox_cache_loaded_at > CHECKBOX_CACHE_TTL:#checkbox_cache_expiry:
             exists = await redis.exists(checkboxes_key)
             if not exists:
-                #initialize redis pipeline batch operation
-                pipe = redis.pipeline()
-                #for val in [json.dumps(False) * N_CHECKBOXES]:
-                    #pipe.rpush(checkboxes_key, val)
-                for _ in range(N_CHECKBOXES):
-                    pipe.rpush(checkboxes_key, json.dumps(False))
-                await pipe.execute()
-                print(f"[CACHE] initilized {N_CHECKBOXES} checkboxes in redis")
+                await redis.rpush(checkboxes_key, *[json.dumps(False)] * N_CHECKBOXES)
 
-            #load all checkboxes at once
             checkbox_raw = await redis.lrange(checkboxes_key, 0, -1)
             checkbox_cache = [json.loads(v) for v in checkbox_raw]
             checkbox_cache_loaded_at = time.time()
-
-            elapsed = (time.time() - start) *1000
-            print(f"[CACHE] loaded {len(checkbox_cache)} checkboxes in {elapsed:.2f}ms")
 
         return checkbox_cache
 
@@ -251,37 +185,12 @@ def web():
         volume.commit()
         print("Volume committed  -data persisted")
 
-    #create background task queue that doesnt block responses
-    background_tasks = set()
-
-    def fire_and_forget(coro):
-        """Schedule a coroutine safely even if no event loop is running yet."""
-        """start a task without waiting for it"""
-            
-        task = asyncio.create_task(coro)
-        background_tasks.add(task)
-        task.add_done_callback(background_tasks.discard)
-
-    
-    #preload checkbox cache on startup
-    async def preload_cache():
-        try:
-            await init_checkboxes()
-            print("[STARTUP] checkbox cache preloaded")
-        except Exception as e:
-            print(f"[STARTUP] error preloading cache: {e}")
-        
-    #run preload async in backgound without blocking startup request
-    #fire_and_forget(preload_cache())
-
     style= open(css_path_remote, "r").read()
     app, _ = fh.fast_app(
         on_shutdown=[on_shutdown],
-        on_startup=[lambda: fire_and_forget(preload_cache())], #runs once safely
         hdrs=[fh.Style(style)],
-        #hdrs=[fh.Link(rel="stylesheet", href= "/assets/style.css")],
     )
-    
+
     metrics_for_count = { "request_count" : 0,  "last_throughput_log" : time.time() }
     throughput_lock = asyncio.Lock()
 
@@ -306,7 +215,7 @@ def web():
                 metrics_for_count["request_count"] = 0
                 metrics_for_count["last_throughput_log"] = now
         return response
-
+    
     @app.get("/grid/{client_id}")
     async def grid(client_id:str):
         #this runs once per client, returns ~450 KB instead of 2.2MB
@@ -336,20 +245,9 @@ def web():
         await init_checkboxes()
 
         #fire and forget - truly non blocking, as before asgi waits the background task to finish
-        fire_and_forget(background_geo_logging(client_ip,user_agent, redis))
+        #fire_and_forget(background_geo_logging(client_ip,user_agent, redis))
 
-        print(f"[HOME] Client {client.id[:8]} | IP : {client_ip} | Page served (geo logging in background)")
-
-        # checkbox_array = [ 
-        #     fh.Input(
-        #         type ="checkbox",
-        #         id=f"cb-{i}",
-        #         checked= val,
-        #         hx_post= f"/checkbox/toggle/{i}/{client.id}",#make_hx_post(i, client.id), # when clicked, that checkbox will send a POST request to the server with its index
-        #         hx_swap="none",
-        #         cls="cb")
-        #     for i,val in enumerate(checkbox_cache)
-        # ]
+        #print(f"[HOME] Client {client.id[:8]} | IP : {client_ip} | Page served (geo logging in background)")
 
         #return page fast (no blocking by geo logging API) 
         return(
@@ -376,7 +274,6 @@ def web():
         client_ip = get_real_ip(request)
         user_agent = request.headers.get('user-agent', 'unknown')
 
-        #quick geo lookup usually from cache
         async with clients_mutex:
             client = clients.get(client_id)
 
@@ -388,8 +285,7 @@ def web():
         else:
             geo = client.geo
 
-        #record in background
-        fire_and_forget(record_visitors(client_ip, user_agent, geo, redis))
+        await record_visitors(client_ip, user_agent, geo, redis)
 
         city = geo.get("city")
         zip_code = geo.get('postal')
@@ -400,9 +296,7 @@ def web():
             f"IP: {client_ip} | {city}, {zip_code}, {country} | ISP: {isp} | - User-Agent: {user_agent[:50]}...")
 
         async with clients_mutex:
-            async with checkbox_cache_lock:
-                if checkbox_cache is None:
-                    await init_checkboxes()
+            await init_checkboxes()
             try:
                 current = checkbox_cache[i]
             except Exception:
@@ -443,13 +337,25 @@ def web():
             client.heartbeat()
             diffs_list = client.pull_diffs()
         
-        #Minimul logging skip geo diffs on endpoint for speed
         client_ip = get_real_ip(request)
-        print(f"[DIFFs] Sending {len(diffs_list)} diffs to {client_id[:8]} | IP: {client_ip}")
+        async with clients_mutex:
+            client = clients.get(client_id)
+        now = time.time()
+        if client is None or not client.has_recent_geo(now):
+            geo = await get_geo(client_ip, redis)
+            if client:
+                client.set_geo(geo, now)
 
-        async with checkbox_cache_lock:
-            if checkbox_cache is None:
-                await init_checkboxes()
+        city = geo.get("city")
+        zip_code = geo.get('postal')
+        country = geo.get("country_name") or geo.get("country")
+        isp = geo.get("org") or geo.get("isp")
+        print(
+            f"[DIFFS] Sending {len(diffs)} diffs to {client_id[:8]}| IP: {client_ip} |"
+            f"{city}, {zip_code}, {country}, | ISP: {isp} diff sent"
+            )
+
+        await init_checkboxes()
         diff_values = {}
         for idx in diffs_list:
             try:
@@ -511,3 +417,34 @@ def web():
         )
     
     return app
+
+class Client:
+    def __init__(self):
+        self.id = str(uuid4())
+        self.diffs = []
+        self.inactive_deadline = time.time() + 30
+        self.geo = None
+        self.geo_ts = 0.0
+    
+    def is_active(self):
+        return time.time() < self.inactive_deadline
+    
+    def heartbeat(self):
+        self.inactive_deadline = time.time() + 30
+
+    def add_diff(self, i):
+        if i not in self.diffs:
+            self.diffs.append(i)
+
+    def pull_diffs(self):
+        #return a copy of the diffs and clear them
+        diffs = self.diffs
+        self.diffs = []
+        return diffs
+    def set_geo(self, geo_obj, now=None):
+        self.geo = geo_obj
+        self.geo_ts = now or time.time()
+
+    def has_recent_geo(self, now=None):
+        now = now or time.time()
+        return (self.geo is not None) and ((now - self.geo_ts) <= CLIENT_GEO_TTL)
