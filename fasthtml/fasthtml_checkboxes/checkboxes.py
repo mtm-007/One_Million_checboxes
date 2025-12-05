@@ -32,7 +32,7 @@ def make_hx_post(i, client_id):
     return f"/checkbox/toggle/{i}/{client_id}"
 
 GEO_TTL_REDIS = 86400 
-CLIENT_GEO_TTL = 30.0  #client level in memory small cache (30s)
+CLIENT_GEO_TTL = 300.0  #client level in memory small cache (5min)
 
 #New geolocation helper function
 async def get_geo_from_providers(ip:str, redis):
