@@ -170,7 +170,7 @@ app_image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("python-fasthtml==0.12.35", "inflect~=7.4.0", "httpx==0.27.0" ,"redis>=5.3.0")
     .apt_install("redis-server")
-    .add_local_file(css_path_local,remote_path=css_path_remote)
+    .add_local_file(css_path_local,remote_path="/assets/styles.css")
     )
 
 @app.function( 
@@ -279,7 +279,7 @@ def web():
         on_shutdown=[on_shutdown],
         on_startup=[lambda: fire_and_forget(preload_cache())], #runs once safely
         #hdrs=[fh.Style(style)],
-        hdrs=[fh.Link(rel="stylesheet", href="/assets/styles.css")],
+        hdrs=[fh.Link(rel="stylesheet", href= "/assets/styles.css")],
     )
     
     metrics_for_count = { "request_count" : 0,  "last_throughput_log" : time.time() }
