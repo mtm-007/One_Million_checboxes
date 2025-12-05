@@ -288,28 +288,12 @@ def web():
     def fire_and_forget(coro):
         """Schedule a coroutine safely even if no event loop is running yet."""
         """start a task without waiting for it"""
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop and loop.is_running():
-            task = loop.create_task(coro)
-            background_tasks.add(task)
-            task.add_done_callback(background_tasks.discard)
-            return task
-        
-        #no running loop: run the coroutine in a new backgorund threads loop
-        def runner():
-            try:
-                asyncio.run(coro)
-            except Exception as e:
-                #dont let exeception silently die
-                print(f"[BG-THREAD ERROR] {e}")
+            
+        task = asyncio.create_task(coro)
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
 
-        t = threading.Thread(target=runner, daemon=True)
-        t.start()
-        return t
-
+    
     #preload checkbox cache on startup
     async def preload_cache():
         try:
@@ -319,7 +303,7 @@ def web():
             print(f"[STARTUP] error preloading cache: {e}")
         
     #run preload async in backgound without blocking startup request
-    fire_and_forget(preload_cache())
+    #fire_and_forget(preload_cache())
 
     @app.get("/")
     async def get(request):
