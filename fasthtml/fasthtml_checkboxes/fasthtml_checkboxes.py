@@ -27,11 +27,24 @@ checkbox_cache = None
 checkbox_cache_loaded_at = 0.0
 CHECKBOX_CACHE_TTL = 5 #60 * 10 #keep for 10 minutes in memory
 
-def make_hx_post(i, client_id):
-    return f"/checkbox/toggle/{i}/{client_id}"
-
 GEO_TTL_REDIS = 86400 
 CLIENT_GEO_TTL = 30.0  #client level in memory small cache (30s)
+
+#background geo logging(non blocking page loading)
+async def background_geo_logging(client_ip, user_agent, redis):
+    """Run geo lookup in background without blocking page load"""
+    try:
+        geo = await get_geo(client_ip, redis)
+        await record_visitors(client_ip,user_agent, geo, redis)
+
+        city = geo.get("city")
+        zip_code = geo.get('postal') or geo.get("zip")
+        country = geo.get("country_name") or geo.get("country")
+        isp = geo.get("org") or geo.get("isp")
+        print(
+            f"[GEO] {client_ip} | {city}, {zip_code}, {country} | ISP: {isp}")
+    except Exception as e:
+        print(f"[GEO ERROR] {client_ip}: {e}")
 
 #New geolocation helper function
 async def get_geo_from_providers(ip:str, redis):
@@ -63,10 +76,10 @@ async def get_geo_from_providers(ip:str, redis):
 
 async def get_geo(ip: str, redis):
     """Return geo info from ip using cache + fallback providers"""
-
     cached = await redis.get(f"geo:{ip}")
     if cached:
         return json.loads(cached)
+
     #fetch from providers and cache
     data = await get_geo_from_providers(ip,redis)
     try:
@@ -131,21 +144,21 @@ app_image = (
         max_containers=1,
         volumes={"/data": volume},)
 
-@modal.concurrent(max_inputs=1000)
+@modal.concurrent(max_inputs=5000)
 @modal.asgi_app()
 def web():
-    # ---------------------------
     # Start redis server locally inside the container (persisted to volume)
-    # ---------------------------
+
     redis_process = subprocess.Popen(
-        ["redis-server", 
-         "--protected-mode", "no",
-         "--bind","127.0.0.1", 
-         "--port", "6379", 
-         "--dir", "/data", #store data in persistent volume
-         "--save", "86400", "1", #save once per day
-         "--save", "" ] #disable all other automatic saves
-        ,
+        [   
+            "redis-server", 
+            "--protected-mode", "no",
+            "--bind","127.0.0.1", 
+            "--port", "6379", 
+            "--dir", "/data", #store data in persistent volume
+            "--save", "86400", "1", #save once per day
+            "--save", "" ] #disable all other automatic saves
+            ,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL
     )
@@ -158,7 +171,7 @@ def web():
     async def init_checkboxes():
         global checkbox_cache, checkbox_cache_loaded_at
 
-        if checkbox_cache is None or time.time() - checkbox_cache_loaded_at > CHECKBOX_CACHE_TTL:#checkbox_cache_expiry:
+        if checkbox_cache is None or time.time() - checkbox_cache_loaded_at > CHECKBOX_CACHE_TTL:
             exists = await redis.exists(checkboxes_key)
             if not exists:
                 await redis.rpush(checkboxes_key, *[json.dumps(False)] * N_CHECKBOXES)
@@ -217,8 +230,7 @@ def web():
     
     @app.get("/")
     async def get(request):
-        await init_checkboxes()
-
+    
         #log IP address
         client_ip = get_real_ip(request)
         user_agent = request.headers.get('user-agent', 'unknown')
@@ -226,36 +238,20 @@ def web():
         #register a new client
         client = Client()
         async with  clients_mutex:
-            clients[client.id] =client
+            clients[client.id] = client
 
-        now = time.time()
-        if not client.has_recent_geo(now):
-            geo = await get_geo(client_ip, redis)
-            client.set_geo(geo, now)
-        else:
-            geo = client.geo
-
-        #geo location look up
-        await record_visitors(client_ip, user_agent, geo, redis)
-        
-        city = geo.get("city")
-        zip_code = geo.get('postal')
-        country = geo.get("country_name") or geo.get("country")
-        isp = geo.get("org") or geo.get("isp")
-        print(f"[HOME] New Client connected - IP: {client_ip} | {city}, {zip_code}, {country} | ISP: {isp} |- User-Agent: {user_agent[:80]}...")
-
+        #Load checkboxes immediately
         await init_checkboxes()
-        
+
         checkbox_array = [ 
             fh.CheckboxX(
                 id=f"cb-{i}",
                 checked= val,
-                hx_post= make_hx_post(i, client.id),
-                #f"/checkbox/toggle/{i}/{client.id}",  # when clicked, that checkbox will send a POST request to the server with its index
+                hx_post= f"/checkbox/toggle/{i}/{client.id}",#make_hx_post(i, client.id), # when clicked, that checkbox will send a POST request to the server with its index
             )
                 for i,val in enumerate(checkbox_cache)
             ]
-        local_cache = checkbox_array #snapchat reference
+        asyncio.create_task(background_geo_logging(client_ip,user_agent, redis))
 
         return(
             fh.Titled(f"{N_CHECKBOXES // 1000}k Checkboxes"),
@@ -269,7 +265,6 @@ def web():
                     hx_get=f"/diffs/{client.id}", #call the diffs  endpoint
                     hx_swap="none", #dont replace the entire page
                 ),
-                #fh.A("view visitors , href="/visitors")
         )
 
     #users submitting checkbox toggles
@@ -289,7 +284,8 @@ def web():
         else:
             geo = client.geo
 
-        await record_visitors(client_ip, user_agent, geo, redis)
+        #record in background
+        asyncio.create_task(record_visitors(client_ip, user_agent, geo, redis))
 
         city = geo.get("city")
         zip_code = geo.get('postal')
@@ -341,23 +337,9 @@ def web():
             client.heartbeat()
             diffs_list = client.pull_diffs()
         
+        #Minimul logging skip geo diffs on endpoint for speed
         client_ip = get_real_ip(request)
-        async with clients_mutex:
-            client = clients.get(client_id)
-        now = time.time()
-        if client is None or not client.has_recent_geo(now):
-            geo = await get_geo(client_ip, redis)
-            if client:
-                client.set_geo(geo, now)
-
-        city = geo.get("city")
-        zip_code = geo.get('postal')
-        country = geo.get("country_name") or geo.get("country")
-        isp = geo.get("org") or geo.get("isp")
-        print(
-            f"[DIFFS] Sending {len(diffs)} diffs to {client_id[:8]}| IP: {client_ip} |"
-            f"{city}, {zip_code}, {country}, | ISP: {isp} diff sent"
-            )
+        print(f"[DIFFs] Sending {len(diffs_list)} diffs to {client_id[:8]} | IP: {client_ip}")
 
         await init_checkboxes()
         diff_values = {}
