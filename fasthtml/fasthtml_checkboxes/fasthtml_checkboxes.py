@@ -134,6 +134,38 @@ def get_real_ip(request):
     #fallback to direct client host 
     return request.client.host
 
+
+class Client:
+    def __init__(self):
+        self.id = str(uuid4())
+        self.diffs = []
+        self.inactive_deadline = time.time() + 30
+        self.geo = None
+        self.geo_ts = 0.0
+    
+    def is_active(self):
+        return time.time() < self.inactive_deadline
+    
+    def heartbeat(self):
+        self.inactive_deadline = time.time() + 30
+
+    def add_diff(self, i):
+        if i not in self.diffs:
+            self.diffs.append(i)
+
+    def pull_diffs(self):
+        #return a copy of the diffs and clear them
+        diffs = self.diffs
+        self.diffs = []
+        return diffs
+    def set_geo(self, geo_obj, now=None):
+        self.geo = geo_obj
+        self.geo_ts = now or time.time()
+
+    def has_recent_geo(self, now=None):
+        now = now or time.time()
+        return (self.geo is not None) and ((now - self.geo_ts) <= CLIENT_GEO_TTL)
+
 app_image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("python-fasthtml==0.12.35", "inflect~=7.4.0", "httpx==0.27.0" ,"redis>=5.3.0")
@@ -474,34 +506,3 @@ def web():
         )
     
     return app
-
-class Client:
-    def __init__(self):
-        self.id = str(uuid4())
-        self.diffs = []
-        self.inactive_deadline = time.time() + 30
-        self.geo = None
-        self.geo_ts = 0.0
-    
-    def is_active(self):
-        return time.time() < self.inactive_deadline
-    
-    def heartbeat(self):
-        self.inactive_deadline = time.time() + 30
-
-    def add_diff(self, i):
-        if i not in self.diffs:
-            self.diffs.append(i)
-
-    def pull_diffs(self):
-        #return a copy of the diffs and clear them
-        diffs = self.diffs
-        self.diffs = []
-        return diffs
-    def set_geo(self, geo_obj, now=None):
-        self.geo = geo_obj
-        self.geo_ts = now or time.time()
-
-    def has_recent_geo(self, now=None):
-        now = now or time.time()
-        return (self.geo is not None) and ((now - self.geo_ts) <= CLIENT_GEO_TTL)
