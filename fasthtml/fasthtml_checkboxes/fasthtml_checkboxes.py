@@ -27,7 +27,7 @@ clients_mutex = Lock()
 checkbox_cache = None
 checkbox_cache_loaded_at = 0.0
 checkbox_cache_lock = Lock()
-CHECKBOX_CACHE_TTL =  60 * 10 #keep for 10 minutes in memory
+CHECKBOX_CACHE_TTL =  30 #60 * 10 #keep for 10 minutes in memory
 
 GEO_TTL_REDIS = 86400 
 CLIENT_GEO_TTL = 30.0  #client level in memory small cache (30s)
