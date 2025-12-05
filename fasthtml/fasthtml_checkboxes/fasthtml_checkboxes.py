@@ -251,9 +251,33 @@ def web():
         volume.commit()
         print("Volume committed  -data persisted")
 
+    #create background task queue that doesnt block responses
+    background_tasks = set()
+
+    def fire_and_forget(coro):
+        """Schedule a coroutine safely even if no event loop is running yet."""
+        """start a task without waiting for it"""
+            
+        task = asyncio.create_task(coro)
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
+    
+    #preload checkbox cache on startup
+    async def preload_cache():
+        try:
+            await init_checkboxes()
+            print("[STARTUP] checkbox cache preloaded")
+        except Exception as e:
+            print(f"[STARTUP] error preloading cache: {e}")
+        
+    #run preload async in backgound without blocking startup request
+    #fire_and_forget(preload_cache())
+
     style= open(css_path_remote, "r").read()
     app, _ = fh.fast_app(
         on_shutdown=[on_shutdown],
+        on_startup=[lambda: fire_and_forget(preload_cache())] #runs once safely
         hdrs=[fh.Style(style)],
     )
 
@@ -281,29 +305,6 @@ def web():
                 metrics_for_count["request_count"] = 0
                 metrics_for_count["last_throughput_log"] = now
         return response
-
-    #create background task queue that doesnt block responses
-    background_tasks = set()
-
-    def fire_and_forget(coro):
-        """Schedule a coroutine safely even if no event loop is running yet."""
-        """start a task without waiting for it"""
-            
-        task = asyncio.create_task(coro)
-        background_tasks.add(task)
-        task.add_done_callback(background_tasks.discard)
-
-    
-    #preload checkbox cache on startup
-    async def preload_cache():
-        try:
-            await init_checkboxes()
-            print("[STARTUP] checkbox cache preloaded")
-        except Exception as e:
-            print(f"[STARTUP] error preloading cache: {e}")
-        
-    #run preload async in backgound without blocking startup request
-    fire_and_forget(preload_cache())
 
     @app.get("/")
     async def get(request):
