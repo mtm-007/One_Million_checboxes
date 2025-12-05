@@ -227,7 +227,15 @@ def web():
                 metrics_for_count["request_count"] = 0
                 metrics_for_count["last_throughput_log"] = now
         return response
-    
+    #create background task queue that doesnt block responses
+    background_tasks = set()
+
+    def fire_and_forget(coro):
+        """start a task without waiting for it"""
+        task = asyncio.create_task(coro)
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
     @app.get("/")
     async def get(request):
     
@@ -251,8 +259,13 @@ def web():
             )
                 for i,val in enumerate(checkbox_cache)
             ]
-        asyncio.create_task(background_geo_logging(client_ip,user_agent, redis))
 
+        #fire and forget - truly non blocking, as before asgi waits the background task to finish
+        fire_and_forget(background_geo_logging(client_ip,user_agent, redis))
+
+        print(f"[HOME] Client {client.id[:8]} | IP : {client_ip} | Page served (geo logging in background)")
+
+        #return page fast (no blocking by geo logging API) 
         return(
             fh.Titled(f"{N_CHECKBOXES // 1000}k Checkboxes"),
             fh.Main(
@@ -285,7 +298,7 @@ def web():
             geo = client.geo
 
         #record in background
-        asyncio.create_task(record_visitors(client_ip, user_agent, geo, redis))
+        fire_and_forget(record_visitors(client_ip, user_agent, geo, redis))
 
         city = geo.get("city")
         zip_code = geo.get('postal')
