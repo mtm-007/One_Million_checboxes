@@ -25,7 +25,8 @@ clients_mutex = Lock()
 
 checkbox_cache = None
 checkbox_cache_loaded_at = 0.0
-CHECKBOX_CACHE_TTL = 5 #60 * 10 #keep for 10 minutes in memory
+checkbox_cache_lock = Lock()
+CHECKBOX_CACHE_TTL =  60 * 10 #keep for 10 minutes in memory
 
 GEO_TTL_REDIS = 86400 
 CLIENT_GEO_TTL = 30.0  #client level in memory small cache (30s)
@@ -171,14 +172,30 @@ def web():
     async def init_checkboxes():
         global checkbox_cache, checkbox_cache_loaded_at
 
-        if checkbox_cache is None or time.time() - checkbox_cache_loaded_at > CHECKBOX_CACHE_TTL:
+        #use lock to prevent multiple simultaneous loads
+        async with checkbox_cache_lock:
+            #check again inside lock in case another request just loaded it
+            if checkbox_cache is None or time.time() - checkbox_cache_loaded_at > CHECKBOX_CACHE_TTL:
+                return checkbox_cache
+            print(f"[CACHE] Loading checkboxes from redis...")
+            start = time.time()
+
             exists = await redis.exists(checkboxes_key)
             if not exists:
-                await redis.rpush(checkboxes_key, *[json.dumps(False)] * N_CHECKBOXES)
+                #initialize redis pipeline batch operation
+                pipe = redis.pipeline()
+                for val in [json.dumps(False) * N_CHECKBOXES]:
+                    pipe.rpush(checkboxes_key, val)
+                await pipe.execute()
+                print(f"[CACHE] initilized {N_CHECKBOXES} checkboxes")
 
+            #load all checkboxes at once
             checkbox_raw = await redis.lrange(checkboxes_key, 0, -1)
             checkbox_cache = [json.loads(v) for v in checkbox_raw]
             checkbox_cache_loaded_at = time.time()
+
+            elapsed = (time.time() - start) *1000
+            print(f"[CACHE] loaded {len(checkbox_cache)} checkboxes in {elapsed:.2f}ms")
 
         return checkbox_cache
 
@@ -227,6 +244,7 @@ def web():
                 metrics_for_count["request_count"] = 0
                 metrics_for_count["last_throughput_log"] = now
         return response
+
     #create background task queue that doesnt block responses
     background_tasks = set()
 
@@ -235,6 +253,17 @@ def web():
         task = asyncio.create_task(coro)
         background_tasks.add(task)
         task.add_done_callback(background_tasks.discard)
+
+    #preload checkbox cache on startup
+    async def preload_cache():
+        try:
+            await init_checkboxes()
+            print("[STARTUP] checkbox cache preloaded")
+        except Exception as e:
+            print(f"[STARTUP] error preloading cache: {e}")
+        
+    #run preload in backgound
+    fire_and_forget(preload_cache())
 
     @app.get("/")
     async def get(request):
@@ -286,6 +315,7 @@ def web():
         client_ip = get_real_ip(request)
         user_agent = request.headers.get('user-agent', 'unknown')
 
+        #quick geo lookup usually from cache
         async with clients_mutex:
             client = clients.get(client_id)
 
