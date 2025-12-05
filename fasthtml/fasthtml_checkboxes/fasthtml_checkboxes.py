@@ -303,7 +303,7 @@ def web():
             print(f"[STARTUP] error preloading cache: {e}")
         
     #run preload async in backgound without blocking startup request
-    #fire_and_forget(preload_cache())
+    fire_and_forget(preload_cache())
 
     @app.get("/")
     async def get(request):
