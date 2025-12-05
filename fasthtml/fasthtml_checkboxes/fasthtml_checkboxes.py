@@ -10,6 +10,7 @@ import httpx
 import asyncio
 import json
 import subprocess
+import threading
 from redis.asyncio import Redis
 
 
@@ -175,8 +176,10 @@ def web():
         #use lock to prevent multiple simultaneous loads
         async with checkbox_cache_lock:
             #check again inside lock in case another request just loaded it
-            if checkbox_cache is None or time.time() - checkbox_cache_loaded_at > CHECKBOX_CACHE_TTL:
+            #if checkbox_cache is None or time.time() - checkbox_cache_loaded_at > CHECKBOX_CACHE_TTL:
+            if checkbox_cache is None and (time.time() - checkbox_cache_loaded_at)<= CHECKBOX_CACHE_TTL:
                 return checkbox_cache
+
             print(f"[CACHE] Loading checkboxes from redis...")
             start = time.time()
 
@@ -184,10 +187,12 @@ def web():
             if not exists:
                 #initialize redis pipeline batch operation
                 pipe = redis.pipeline()
-                for val in [json.dumps(False) * N_CHECKBOXES]:
-                    pipe.rpush(checkboxes_key, val)
+                #for val in [json.dumps(False) * N_CHECKBOXES]:
+                    #pipe.rpush(checkboxes_key, val)
+                for _ in range(N_CHECKBOXES):
+                    pipe.rpush(checkboxes_key, json.dumps(False))
                 await pipe.execute()
-                print(f"[CACHE] initilized {N_CHECKBOXES} checkboxes")
+                print(f"[CACHE] initilized {N_CHECKBOXES} checkboxes in redis")
 
             #load all checkboxes at once
             checkbox_raw = await redis.lrange(checkboxes_key, 0, -1)
@@ -253,16 +258,25 @@ def web():
         """start a task without waiting for it"""
         try:
             loop = asyncio.get_running_loop()
-            task = loop.create_task(coro)
         except RuntimeError:
-            #happend during cold start before ASGI loop exists
-            task = asyncio.run(coro)
-
-        background_tasks.add(task)
-        try:
+            loop = None
+        if loop and loop.is_running():
+            task = loop.create_task(coro)
+            background_tasks.add(task)
             task.add_done_callback(background_tasks.discard)
-        except AttributeError:
-            pass 
+            return task
+        
+        #no running loop: run the coroutine in a new backgorund threads loop
+        def runner():
+            try:
+                asyncio.run(coro)
+            except Exception as e:
+                #dont let exeception silently die
+                print(f"[BG-THREAD ERROR] {e}")
+                
+        t = threading.Thread(target=runner, daemon=True)
+        t.start()
+        return t
 
     #preload checkbox cache on startup
     async def preload_cache():
