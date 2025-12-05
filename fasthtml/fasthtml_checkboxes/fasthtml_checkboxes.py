@@ -177,7 +177,7 @@ def web():
         async with checkbox_cache_lock:
             #check again inside lock in case another request just loaded it
             #if checkbox_cache is None or time.time() - checkbox_cache_loaded_at > CHECKBOX_CACHE_TTL:
-            if checkbox_cache is None and (time.time() - checkbox_cache_loaded_at)<= CHECKBOX_CACHE_TTL:
+            if checkbox_cache is not None and (time.time() - checkbox_cache_loaded_at)<= CHECKBOX_CACHE_TTL:
                 return checkbox_cache
 
             print(f"[CACHE] Loading checkboxes from redis...")
@@ -273,7 +273,7 @@ def web():
             except Exception as e:
                 #dont let exeception silently die
                 print(f"[BG-THREAD ERROR] {e}")
-                
+
         t = threading.Thread(target=runner, daemon=True)
         t.start()
         return t
