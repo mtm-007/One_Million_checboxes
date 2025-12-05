@@ -249,10 +249,20 @@ def web():
     background_tasks = set()
 
     def fire_and_forget(coro):
+        """Schedule a coroutine safely even if no event loop is running yet."""
         """start a task without waiting for it"""
-        task = asyncio.create_task(coro)
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(coro)
+        except RuntimeError:
+            #happend during cold start before ASGI loop exists
+            task = asyncio.run(coro)
+
         background_tasks.add(task)
-        task.add_done_callback(background_tasks.discard)
+        try:
+            task.add_done_callback(background_tasks.discard)
+        except AttributeError:
+            pass 
 
     #preload checkbox cache on startup
     async def preload_cache():
@@ -262,7 +272,7 @@ def web():
         except Exception as e:
             print(f"[STARTUP] error preloading cache: {e}")
         
-    #run preload in backgound
+    #run preload async in backgound without blocking startup request
     fire_and_forget(preload_cache())
 
     @app.get("/")
