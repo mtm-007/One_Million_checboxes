@@ -61,16 +61,16 @@ async def get_geo_from_providers(ip:str, redis):
     #last resort 
     return {"ip": ip, "city": None, "country": None, "zip": None}
 
-async def get_geo(ip: str, redis_client: Redis):
+async def get_geo(ip: str, redis):
     """Return geo info from ip using cache + fallback providers"""
 
-    cached = await redis_client.get(f"geo:{ip}")
+    cached = await redis.get(f"geo:{ip}")
     if cached:
         return json.loads(cached)
     #fetch from providers and cache
-    data = await get_geo_from_providers(ip)
+    data = await get_geo_from_providers(ip,redis)
     try:
-        await redis_client.set(f"geo:{ip}", json.dumps(data), ex=GEO_TTL_REDIS)
+        await redis.set(f"geo:{ip}", json.dumps(data), ex=GEO_TTL_REDIS)
     except Exception:
         pass
     return data
