@@ -349,7 +349,9 @@ def web():
             f"IP: {client_ip} | {city}, {zip_code}, {country} | ISP: {isp} | - User-Agent: {user_agent[:50]}...")
 
         async with clients_mutex:
-            await init_checkboxes()
+            async with checkbox_cache_lock:
+                if checkbox_cache is None:
+                    await init_checkboxes()
             try:
                 current = checkbox_cache[i]
             except Exception:
@@ -394,7 +396,9 @@ def web():
         client_ip = get_real_ip(request)
         print(f"[DIFFs] Sending {len(diffs_list)} diffs to {client_id[:8]} | IP: {client_ip}")
 
-        await init_checkboxes()
+        async with checkbox_cache_lock:
+            if checkbox_cache is None:
+                await init_checkboxes()
         diff_values = {}
         for idx in diffs_list:
             try:
