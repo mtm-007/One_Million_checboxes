@@ -26,11 +26,11 @@ input:not([type=submit], [type=button], [type=reset], [type=range], [type=file],
 
 .grid {
     display: grid;
-    grid-template-columns: repeat(1000, 1fr);
-    gap: 7px;
+    grid-template-columns: repeat(100, 1fr);
+    gap: 6px;
     max-width: 1400px;
     margin: 2rem auto;
-    padding: 0 2rem;
+    justify-content: center;
   }
   .cb {
     width: 18px;
