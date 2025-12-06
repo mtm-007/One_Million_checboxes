@@ -88,13 +88,17 @@ h1 {
 }
 
 .lazy-trigger {
-    height: 1px;
-    width: 100%;
-    display: block;
+    display: inline;
+    height: 0;
+    width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    font-size: 0;
+    line-height: 0;
     opacity: 0;
-    /*text-align: center;
-    padding: 40px;
-    color: #999;*/
+    visibility: hidden;
+    position: absolute;
 }
 
 .footer {

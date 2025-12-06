@@ -258,7 +258,6 @@ def web():
     
     #@app.get("/chunk/{client_id}/{offset}")
     async def _render_chunk(client_id:str, offset:int)->str:
-        #this runs once per client, returns ~450 KB instead of 2.2MB
         #lazy load a chunk of checkboxes
         await init_checkboxes()
 
@@ -272,30 +271,29 @@ def web():
                 is_checked = checkbox_cache[i]
             except IndexError:
                 is_checked=False
-                #autoheal
                 checkbox_cache.append(False)
                 print(f"[HEAL] fixed missing checkbox {i}")
             
-            checked_attr = "checked" if checkbox_cache[i] else ''
+            checked_attr = "checked" if is_checked else ''
             parts.append(
                 f'<input type="checkbox" id="cb-{i}" class="cb" {checked_attr} '
-                f'hx_post="/toggle/{i}/{client_id}" hx_swap="none">'
+                f'hx-post="/toggle/{i}/{client_id}" hx-swap="none">'
             )
-        html = ".join(boxes)"
+        html = "".join(parts)
 
         if end_idx < N_CHECKBOXES:
             next_offset = end_idx
-            trigger = fh.Div( 
-                "",
-                cls="lazy-trigger",
-                hx_get=f"/chunk/{client_id}/{next_offset}",
-                hx_trigger="intersect once",
-                hx_target="#grid-container",
-                hx_swap="beforeend",
+            trigger = (
+                '<span class="lazy-trigger" '
+                f'hx-get="/chunk/{client_id}/{next_offset}" '
+                'hx-trigger="intersect once" '
+                'hx-target="#grid-container" '
+                'hx-swap="beforeend">' 
+                '</span>'
             )
-            html += fh.to_xml(trigger)
+            html += trigger
 
-        return fh.NotStr(html)
+        return html
     
     @app.get("/")
     async def get(request):
@@ -314,7 +312,9 @@ def web():
         asyncio.create_task(record_visitors(client_ip,user_agent, await get_geo(client_ip, redis), redis))
 
         first_chunk_html= await _render_chunk(client.id, offset=0)
-        return( fh.Titled(f"One Million Checkboxes"),
+
+        return( 
+            fh.Titled(f"One Million Checkboxes"),
             fh.Main(
                 fh.H1(f" One Million Checkboxes"),
                 fh.Div( 
@@ -325,7 +325,7 @@ def web():
                     ),
                 fh.Div(
                     fh.NotStr(first_chunk_html), #preload first chunk
-                    #cls="grid-container",
+                    cls="grid-container",
                     id="grid-container",
                 ),
                 fh.Div("Made with FastHTML + Redis deployed with Modal", cls="footer"), 
@@ -390,7 +390,7 @@ def web():
                         # when clicked, that checkbox will send a POST request to the server with its index
                         hx_post=f"/toggle/{i}/{client_id}", hx_swap="none",
                         hx_swap_oob="true",# allows us to later push diffs to arbitrary checkboxes by id
-                        cls= "cbs"
+                        cls= "cb"
                         )
             for i in diffs_list
         ]
