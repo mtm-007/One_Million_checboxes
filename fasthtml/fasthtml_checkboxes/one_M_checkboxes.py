@@ -163,7 +163,7 @@ def web():
     async def startup_migration():
         """Run migration on startup"""
         await migrate_litst_to_bitmap()
-        await diagnose_redis_state()
+        #await diagnose_redis_state()
         print("[STARTUP] Migration check complete")
 
     async def migrate_litst_to_bitmap():
@@ -321,24 +321,6 @@ def web():
         checked = await redis.bitcount(checkboxes_bitmap_key)
         unchecked = N_CHECKBOXES - checked
         return checked,unchecked
-    
-        # sample_size = 10000
-        # pipe = redis.pipeline()
-        # step = N_CHECKBOXES//sample_size
-        # for i in range(0, N_CHECKBOXES, step):
-        #     pipe.lindex(checkboxes_key, i)
-
-        # samples = await pipe.execute()
-        # checked_sample = sum(1 for s in samples if s and json.loads(s))
-        # checked = int((checked_sample / len(samples)) * N_CHECKBOXES)
-        # unchecked = N_CHECKBOXES - checked
-
-        # return checked, unchecked
-
-        # await init_checkboxes()
-        # checked = sum(1 for v in checkbox_cache if v)
-        # unchecked = N_CHECKBOXES - checked
-        # return checked, unchecked
 
     async def on_shutdown():
         print("Shutting down... Saving Redis data")
@@ -389,17 +371,18 @@ def web():
     @app.get("/stats")
     async def stats():
         checked, unchecked = await get_status()
+        print(f"[STATS] Checked: {checked:,}, Unchecked: {unchecked:,}")
         return fh.Div(
             fh.Span(f"{checked:,}", cls="status-checked"),
             " checked • ",
             fh.Span(f"{unchecked:,}",cls="status-unchecked"),
-            " unchecked", cls="stats" )
+            " unchecked", cls="stats", id="stats", hx_get="every 2s", hx_swap="outerHTML")
+    
     @app.get("/chunk/{client_id}/{offset}")
     async def chunk(client_id:str, offset:int):
         html = await _render_chunk(client_id,offset)
         return fh.NotStr(html)
     
-    #@app.get("/chunk/{client_id}/{offset}")
     async def _render_chunk(client_id:str, offset:int)->str:
         #lazy load a chunk of checkboxes
         await init_checkboxes()
@@ -478,9 +461,6 @@ def web():
         async with clients_mutex:
             client = clients.get(client_id)
                 
-            #await init_checkboxes()
-
-            #Get current values
             if i in checkbox_cache:
                 current = checkbox_cache[i]
             else:
