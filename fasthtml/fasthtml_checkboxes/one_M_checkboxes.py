@@ -23,6 +23,8 @@ app = modal.App("one-million-checkboxes")
 volume = modal.Volume.from_name("redis-data-vol", create_if_missing=True)
 
 checkboxes_key = "checkboxes"
+checkboxes_bitmap_key= "checkboxes_bitmap"
+
 clients = {}
 clients_mutex = Lock()
 
@@ -158,6 +160,116 @@ def web():
     redis = Redis.from_url("redis://127.0.0.1:6379")
     print("Redis server started succesfully with persistent storage")
 
+    async def startup_migration():
+        """Run migration on startup"""
+        await migrate_litst_to_bitmap()
+        await diagnose_redis_state()
+        print("[STARTUP] Migration check complete")
+
+    async def migrate_litst_to_bitmap():
+        """one-time migration from redis to bitmap"""
+
+        old_key = "checkboxes"
+        new_key= "checkboxes_bitmap"
+
+        #temporarily: Force re-migration
+        # await redis.delete(new_key)
+        # print("[MIGRATE] Deleted existing bitmap to force fresh migration")
+
+        #check if migration is needed
+        list_exists= await redis.exists(old_key)
+        bitmap_exists = await redis.exists(new_key)
+
+        if not list_exists:
+            print("[MIGRATE] No old data")
+            return
+        if bitmap_exists:
+            print(f"[MIGRATE] Bitmap already exists,skipping migration")
+            return
+        
+        print(f"[MIGRATE] Starting migration from list to bitmap...")
+        start_time = time.time()
+
+        #load all values from list
+        list_len = await redis.llen(old_key)
+        print(f"[MIGRATE] found {list_len:,} checkboxes in list")
+
+        #process in batches
+        batch_size = 10000
+        pipe = redis.pipeline()
+        batch_count = 0
+
+        for batch_start in range(0, list_len, batch_size):
+            batch_end = min(batch_start + batch_size, list_len)
+
+            values = await redis.lrange(old_key, batch_start, batch_end - 1)
+
+            #set bits in bitmap
+            for i, value in enumerate(values):
+                idx = batch_start + i
+                is_checked = json.loads(value) if value else False
+                if is_checked:
+                    pipe.setbit(new_key, idx, 1)
+                    batch_count += 1
+
+            #execute batch
+            await pipe.execute()
+            pipe = redis.pipeline() #reset pipeline
+
+            if batch_start % 100000 ==0:
+                print(f"[MIGRATE] Progress: {batch_start:,}/{list_len:,}")
+
+        elapsed_time = time.time() - start_time
+        print(f"[MIGRATE] Migration complete in {elapsed_time:.2f}s")
+
+        #verify
+        bitmap_count = await redis.bitcount(new_key)
+        print(f"[MIGRATE] Bitmap has {bitmap_count:,} checked checkboxes")
+        print(f"[MIGRATE] Bitmap has {batch_count:,} checked checkboxes")
+
+        if bitmap_count != batch_count:
+            print(f"[MIGRATE] ⚠️ Warning: Mismatch! Expected {batch_count}, got {bitmap_count}")
+
+        #delete old list to save space
+        # await redis.delete(old_key)
+        # print(f"[MIGRATE] Deleted old list")
+
+    async def diagnose_redis_state():
+        """Check what's in Redis"""
+        print("\n" + "="*50)
+        print("REDIS DIAGNOSTIC")
+        print("="*50)
+        
+        # Check old list
+        list_exists = await redis.exists("checkboxes")
+        if list_exists:
+            list_len = await redis.llen("checkboxes")
+            print(f"✓ Old list 'checkboxes' exists: {list_len:,} items")
+            
+            # Sample first 10 values
+            sample = await redis.lrange("checkboxes", 0, 9)
+            checked_in_sample = sum(1 for v in sample if json.loads(v))
+            print(f"  Sample (first 10): {checked_in_sample} checked")
+            
+            # Count all checked (slow but accurate)
+            print("  Counting all checked (this may take a moment)...")
+            all_values = await redis.lrange("checkboxes", 0, -1)
+            total_checked = sum(1 for v in all_values if json.loads(v))
+            print(f"  Total checked in list: {total_checked:,}")
+        else:
+            print("✗ Old list 'checkboxes' does not exist")
+        
+        # Check bitmap
+        bitmap_exists = await redis.exists("checkboxes_bitmap")
+        if bitmap_exists:
+            bitmap_count = await redis.bitcount("checkboxes_bitmap")
+            print(f"✓ Bitmap 'checkboxes_bitmap' exists")
+            print(f"  Checked in bitmap: {bitmap_count:,}")
+        else:
+            print("✗ Bitmap 'checkboxes_bitmap' does not exist")
+        
+        print("="*50 + "\n")
+
     async def init_checkboxes():
         """Initilize Redis list if needed, but DON'T load all into memory """
         current_len = await redis.llen(checkboxes_key)
@@ -190,13 +302,13 @@ def web():
             #use pipeline for batch loading
             pipe = redis.pipeline()
             for idx in missing_indices:
-                pipe.lindex(checkboxes_key, idx)
+                pipe.getbit(checkboxes_bitmap_key, idx)
             
             results = await pipe.execute()
 
             #cache the results
             for idx, result in zip(missing_indices, results):
-                value = json.loads(result) if result is not None else False
+                value = bool(result) #json.loads(result) if result is not None else False
                 checkbox_cache[idx] = value
                 cached_values.append((idx, value))
 
@@ -204,41 +316,25 @@ def web():
         cached_values.sort(key=lambda x:x[0])
         return [v for _, v in cached_values]
     
-
-        # if checkbox_cache is not None or time.time() - checkbox_cache_loaded_at <= CHECKBOX_CACHE_TTL:#checkbox_cache_expiry:
-        #     return checkbox_cache
-        # print(f"[CACHE] Loading {N_CHECKBOXES: ,} checkboxes...")
-        # start = time.time()
-
-
-        # checkbox_raw = await redis.lrange(checkboxes_key, 0, -1)
-        # checkbox_cache = [json.loads(v) for v in checkbox_raw]
-        
-        # if len(checkbox_cache) < N_CHECKBOXES:
-        #     print(f"[FATAL] still misssing checkboxes! Got {len(checkbox_cache):,}, expected {N_CHECKBOXES}")
-        #     checkbox_cache.extend([False] * (N_CHECKBOXES - len(checkbox_cache)))
-
-        # checkbox_cache_loaded_at = time.time()
-        # elapsed_time = (time.time() - start) * 1000
-        # print(f"[CACHE] Fully Loaded {len(checkbox_cache):,} checkboxes in {elapsed_time:.2f}ms")
-
-        # return checkbox_cache
-    
     async def get_status():
         """ Get checked/unchecked counts - use redis directly, not cache"""
-
-        sample_size = 10000
-        pipe = redis.pipeline()
-        step = N_CHECKBOXES//sample_size
-        for i in range(0, N_CHECKBOXES, step):
-            pipe.lindex(checkboxes_key, i)
-
-        samples = await pipe.execute()
-        checked_sample = sum(1 for s in samples if s and json.loads(s))
-        checked = int((checked_sample / len(samples)) * N_CHECKBOXES)
+        checked = await redis.bitcount(checkboxes_bitmap_key)
         unchecked = N_CHECKBOXES - checked
+        return checked,unchecked
+    
+        # sample_size = 10000
+        # pipe = redis.pipeline()
+        # step = N_CHECKBOXES//sample_size
+        # for i in range(0, N_CHECKBOXES, step):
+        #     pipe.lindex(checkboxes_key, i)
 
-        return checked, unchecked
+        # samples = await pipe.execute()
+        # checked_sample = sum(1 for s in samples if s and json.loads(s))
+        # checked = int((checked_sample / len(samples)) * N_CHECKBOXES)
+        # unchecked = N_CHECKBOXES - checked
+
+        # return checked, unchecked
+
         # await init_checkboxes()
         # checked = sum(1 for v in checkbox_cache if v)
         # unchecked = N_CHECKBOXES - checked
@@ -260,6 +356,7 @@ def web():
 
     style= open(css_path_remote, "r").read()
     app, _ = fh.fast_app(
+        on_startup=[startup_migration],
         on_shutdown=[on_shutdown],
         hdrs=[fh.Style(style)],
     )
@@ -316,13 +413,6 @@ def web():
 
         parts =[]
         for i, is_checked in enumerate(checked_values, start=start_idx):
-            # try:
-            #     is_checked = checkbox_cache[i]
-            # except IndexError:
-            #     is_checked=False
-            #     checkbox_cache.append(False)
-            #     print(f"[HEAL] fixed missing checkbox {i}")
-            
             checked_attr = "checked" if is_checked else ''
             parts.append(
                 f'<input type="checkbox" id="cb-{i}" class="cb" {checked_attr} '
@@ -370,7 +460,7 @@ def web():
                     fh.Span(f"{checked:,}", cls="status-checked"), " checked • ",
                     fh.Span(f"{unchecked:,}",cls="status-unchecked"), " unchecked", 
                     cls="stats", id="stats", hx_get="/stats",
-                    hx_trigger="every 2s",hx_swap="outerHTML"
+                    hx_trigger="every 1s",hx_swap="outerHTML"
                     ),
                 fh.Div(
                     fh.NotStr(first_chunk_html), #preload first chunk
@@ -391,21 +481,26 @@ def web():
             #await init_checkboxes()
 
             #Get current values
-            for i in checkbox_cache:
+            if i in checkbox_cache:
                 current = checkbox_cache[i]
             else:
-                raw = await redis.lindex(checkboxes_key, i)
-                current = json.loads(raw) if raw is not None else False
+                bit = await redis.getbit(checkboxes_bitmap_key, i)
+                current = bool(bit)#json.loads(raw) if raw is not None else False
 
             new_value = not current
             checkbox_cache[i] = new_value #Update cache
 
-            asyncio.create_task(redis.lset(checkboxes_key, i, json.dumps(new_value)))
+            print(f"[TOGGLE] index{i}: {current} -> {new_value}")
 
-            # try:
-            #     await redis.lset(checkboxes_key, i, json.dumps(new_value))
-            # except Exception:
-            #     print("warning: redis lset failed")
+            try:
+                await redis.lset(checkboxes_key, i, json.dumps(new_value))
+                #update bitmap
+                await redis.setbit(checkboxes_bitmap_key, i, 1 if new_value else 0)
+
+                bit_value = await redis.getbit(checkboxes_bitmap_key, i)
+                print(f"[TOGGLE] Verified bitmap[{i}] = {bit_value}")
+            except Exception as e:
+                print(f"[TOGGLE ERROR] Failed to update Redis: {e}")
 
             expired = []
             for client in clients.values():
@@ -421,7 +516,14 @@ def web():
             for client_id in expired:
                 del clients[client_id]
 
-        return ""
+        checked, unchecked = await get_status()
+
+        return fh.Div( 
+                    fh.Span(f"{checked:,}", cls="status-checked"), " checked • ",
+                    fh.Span(f"{unchecked:,}",cls="status-unchecked"), " unchecked", 
+                    cls="stats", id="stats", hx_get="/stats",
+                    hx_trigger="every 1s",hx_swap="outerHTML", hx_swap_oob="true"
+                    )
     
     async def cleanup_cache_task():
         """periodically clean up old cache entries"""
