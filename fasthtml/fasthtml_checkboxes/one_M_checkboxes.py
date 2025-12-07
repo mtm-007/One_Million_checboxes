@@ -173,8 +173,8 @@ def web():
         new_key= "checkboxes_bitmap"
 
         #temporarily: Force re-migration
-        await redis.delete(new_key)
-        print("[MIGRATE] Deleted existing bitmap to force fresh migration")
+        # await redis.delete(new_key)
+        # print("[MIGRATE] Deleted existing bitmap to force fresh migration")
 
         #check if migration is needed
         list_exists= await redis.exists(old_key)
