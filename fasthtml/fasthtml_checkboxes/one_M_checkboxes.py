@@ -80,8 +80,14 @@ async def get_geo(ip: str, redis):
 
 
 async def record_visitors(ip, user_agent, geo, redis):
-    #use hash for faster loopups
+    """ Record visitor with visit count tracking"""
     visitors_key = f"visitor:{ip}"
+
+    existing = await redis.get(visitors_key)
+    visit_count = 1
+    if existing:
+        existing_data = json.loads(existing)
+        visit_count = existing_data.get("visit_count", 0) + 1
 
     entry = {
         "ip": ip,
@@ -90,11 +96,15 @@ async def record_visitors(ip, user_agent, geo, redis):
         "zip": geo.get("postal") or geo.get("zip"),
         "country": geo.get("country") or geo.get("country_name"),
         "timestamp": time.time(),
+        "visit_count" : visit_count,
     }
+
     try: 
         await redis.setex(visitors_key, 86400, json.dumps(entry)) #store/update this visitor
         await redis.zadd("recent_visitors_sorted", {ip:time.time()}) #maintain a sorted set by timestamp
         await redis.zremrangebyrank("recent_visitors_sorted", 0,-101) 
+
+        await redis.incr("total_visitors_count")
     except Exception:
         pass
 
@@ -590,6 +600,23 @@ def web():
                 v["timestamp"] = float(v["timestamp"])
                 visitors.append(v)
 
+        total_visitors = await redis.get("total_visitors_count")
+        total_count = int(total_visitors) if total_visitors else 0
+
+        hour_stats = {}
+        for v in visitors:
+            hour = time.strftime("%H:00", time.localtime(v["timestamp"]))
+            hour_stats[hour] = hour_stats.get(hour, 0) + 1
+
+        sorted_hours = sorted(hour_stats.items(), key=lambda x:x[0], reverse=True)
+
+        day_stats = {}
+        for v in visitors:
+            day = time.strftime("%Y-%m-%d", time.localtime(v["timestamp"]))
+            day_stats[day] = day_stats.get(day, 0) + 1
+
+        sorted_days = sorted(day_stats.items(), key=lambda x:x[0], reverse=True)
+
         rows = [
             fh.Tr(
                 fh.Td(v["ip"]),
@@ -597,23 +624,98 @@ def web():
                 fh.Td(v.get("zip", "-")),
                 fh.Td(v["country"] or "-"),
                 fh.Td(time.strftime("%H:%M:%S", time.localtime(v["timestamp"]))),
+                fh.Td(fh.Span(f"{v.get('visit_count', 1)}", cls="visit-badge")),
             )
             for v in visitors
         ]
 
-        return fh.Main(
-            fh.H1("Recent Visitors"),
-            fh.Table(
-                fh.Tr(
-                    fh.Th("IP"),
-                    fh.Th("City"),
-                    fh.Th("Zip"),
-                    fh.Th("Country"),
-                    fh.Th("Time"),
+        max_count = max([count for _,count in sorted_hours], default=1) if sorted_hours else 1
+        chart_bars = []
+        for hour, count in sorted_hours[:24]:
+            percentage = (count/ max_count) * 100
+
+            chart_bars.append(
+                fh.Div(
+                    fh.Div(
+                        fh.Span(hour, cls="countrt-label"),
+                        fh.Span(f"{count} visitor{'s' if count != 1 else ''}", cls="country-count"),
+                        cls="bar-labels"
+                    ),
+                    fh.Div(
+                        fh.Div(
+                            style=f"width: {percentage}%",
+                            cls="bar-fill"
+                        ),
+                        cls="bar-container"
                 ),
-                *rows,
-                cls="table"
+                cls="chart-row"
             )
+        )
+
+        max_count = max([count for _,count in sorted_days], default=1) if sorted_days else 1
+        chart_bars_days = []
+        for date_str, count in sorted_days[:7]:
+            display_date = time.strftime("%a,%b %d", time.strptime(date_str, "%Y-%m-%d")),
+            percentage = (count/ max_count) * 100
+
+            chart_bars_days.append(
+                fh.Div(
+                    fh.Div(
+                        fh.Span(display_date, cls="countrt-label"),
+                        fh.Span(f"{count} visitor{'s' if count != 1 else ''}", cls="country-count"),
+                        cls="bar-labels"
+                    ),
+                    fh.Div(
+                        fh.Div(
+                            style=f"width: {percentage}%",
+                            cls="bar-fill"
+                        ),
+                        cls="bar-container"
+                ),
+                cls="chart-row"
+            )
+        )
+
+        return fh.Main(
+            fh.H1("Recent Visitors Dashboard", cls="dashboard-title"),
+
+            fh.Div(
+                fh.Div("Total Unique Visitors", cls="stats-label"),
+                fh.Div(f"{total_count:,}", cls="stats-number"),
+                fh.Div("Last 100 Visitors Shown below", style="font-size: 0.9em; opacity: 0.8;"),
+                cls="stats-card"
+            ),
+
+            fh.Div(
+                fh.H2("Visitors by Day (Last 7 days)", cls="section-title"),
+                *chart_bars_days if chart_bars_days else [fh.P("No visitors data yet", style="text-align: center; color:#999;")],
+                cls="stats-card"),
+
+            fh.Div(
+                fh.H2("Visitors by Hour (Last 24 Hours)", cls="section-title"),
+                *chart_bars if chart_bars else [fh.P("No visitors data yet", style="text-align: center; color:#999;")],
+                cls="stats-card"),
+
+            fh.Div(
+                fh.H2("Recent visitors", cls="sectioin-title"),
+                fh.Table(
+                    fh.Tr(
+                        fh.Th("IP"),
+                        fh.Th("City"),
+                        fh.Th("Zip"),
+                        fh.Th("Country"),
+                        fh.Th("Visits"),
+                        fh.Th("Last seen"),
+                    ),
+                    *rows,
+                    cls="table"
+                )
+            ),
+            fh.Div(
+                fh.A("<- Back to checkboxes", href="/", cls="back-link"),
+                style="text-align: center;"
+            ),
+            cls="visitors-container"
         )
     
     return app
