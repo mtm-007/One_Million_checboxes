@@ -269,7 +269,7 @@ def web():
             print("✗ Bitmap 'checkboxes_bitmap' does not exist")
         
         print("="*50 + "\n")
-
+    
     async def init_checkboxes():
         """Initilize Redis list if needed, but DON'T load all into memory """
         current_len = await redis.llen(checkboxes_key)
@@ -545,6 +545,38 @@ def web():
         ]
         return diff_array
     
+    @app.get("/debug")
+    async def compare_list_vs_bitmap():
+        """ Compare old vs new bitmap - SLOW, only use for debugging"""
+        print("[DEBUG] Starting comparison...")
+
+        #count checked in old list 
+        all_values = await redis.lrange(checkboxes_key, 0, -1)
+        list_checked = sum(1 for v in all_values if json.loads(v))
+
+        bitmap_checked = await redis.bitcount(checkboxes_bitmap_key)
+
+        mismatches = []
+        for i in range(min(1000, N_CHECKBOXES)):
+            list_val = json.loads(all_values[i]) if i < len(all_values) else False
+            bitmap_val = bool(await redis.getbit(checkboxes_bitmap_key, i))
+            if list_val != bitmap_val:
+                mismatches.append(f"Index {i}: list={list_val}, bitmap={bitmap_val}")
+        
+        print(f"[DEBUG] List checked: {list_checked:,}")
+        print(f"[DEBUG] bitmap checked: {bitmap_checked:,}")
+        print(f"[DEBUG] Difference: {abs(list_checked - bitmap_checked):,}")
+
+        return fh.Main(
+            fh.H1("LIST vs Bitmap Comparison"),
+            fh.P(f"Old List: { list_checked:,} checked"),
+            fh.P(f"New Bitmap: {bitmap_checked:,} checked"),
+            fh.P(f"Difference: {abs(list_checked - bitmap_checked):,}"),
+            fh.H2("sample mismatches (first 1000 indices)"),
+            fh.Pre("\n".join(mismatches[:20]) if mismatches else "No mismatches found in sample"),
+            fh.P(f"Total mismatches in sample: {len(mismatches)}")
+        )
+
     @app.get("/visitors")
     async def visitors_page(request):
         recent_ips = await redis.zrange("recent_visitors_sorted", 0, 99, desc=True)
