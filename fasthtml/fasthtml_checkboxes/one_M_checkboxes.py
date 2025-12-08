@@ -6,7 +6,6 @@ from uuid import uuid4
 import modal
 from modal import Image
 import fasthtml.common as fh
-import inflect
 import httpx
 import asyncio
 import json
@@ -81,32 +80,40 @@ async def get_geo(ip: str, redis):
 
 async def record_visitors(ip, user_agent, geo, redis):
     """ Record visitor with visit count tracking"""
-    visitors_key = f"visitor:{ip}"
+    try:
+        visitors_key = f"visitor:{ip}"
 
-    existing = await redis.get(visitors_key)
-    visit_count = 1
-    if existing:
-        existing_data = json.loads(existing)
-        visit_count = existing_data.get("visit_count", 0) + 1
+        existing = await redis.get(visitors_key)
+        is_new_visitor = existing is None
 
-    entry = {
-        "ip": ip,
-        "user_agent": user_agent[:120],
-        "city": geo.get("city"),
-        "zip": geo.get("postal") or geo.get("zip"),
-        "country": geo.get("country") or geo.get("country_name"),
-        "timestamp": time.time(),
-        "visit_count" : visit_count,
-    }
+        if existing:
+            existing_data = json.loads(existing)
+            visit_count = existing_data.get("visit_count", 1) + 1
+        else:
+            visit_count = 1
 
-    try: 
-        await redis.setex(visitors_key, 86400, json.dumps(entry)) #store/update this visitor
+        entry = {
+            "ip": ip,
+            "user_agent": user_agent[:120],
+            "city": geo.get("city"),
+            "zip": geo.get("postal") or geo.get("zip"),
+            "country": geo.get("country") or geo.get("country_name"),
+            "timestamp": time.time(),
+            "visit_count" : visit_count,
+        }
+
+        await redis.setex(visitors_key, 86400, json.dumps(entry)) #store/update this visitor, expired in 24 hrs
         await redis.zadd("recent_visitors_sorted", {ip:time.time()}) #maintain a sorted set by timestamp
-        await redis.zremrangebyrank("recent_visitors_sorted", 0,-101) 
+        await redis.zremrangebyrank("recent_visitors_sorted", 0,-101) #keep only last 100
 
-        await redis.incr("total_visitors_count")
-    except Exception:
-        pass
+        if is_new_visitor:
+            await redis.incr("total_visitors_count")
+            print(f"[VISITOR]New visitor from {geo.get('city', 'Unknown',)}, {geo.get('country', 'Unknown')}")
+        else:
+            print(f"[VISITOR]Returning visitor {ip}  (visit #{visit_count}")
+
+    except Exception as e:
+        print(f"[ERROR] Failed to record visitor: {e}")
 
 css_path_local = Path(__file__).parent / "style_v2.css"
 css_path_remote = "/assets/style_v2.css"
@@ -135,7 +142,7 @@ def get_real_ip(request):
 
 app_image = (
     modal.Image.debian_slim(python_version="3.12")
-    .pip_install("python-fasthtml==0.12.35", "inflect~=7.4.0", "httpx==0.27.0" ,"redis>=5.3.0")
+    .pip_install("python-fasthtml==0.12.36", "httpx==0.27.0" ,"redis>=5.3.0")
     .apt_install("redis-server")
     .add_local_file(css_path_local,remote_path=css_path_remote)
     )
@@ -172,7 +179,7 @@ def web():
 
     async def startup_migration():
         """Run migration on startup"""
-        await migrate_litst_to_bitmap()
+        #await migrate_litst_to_bitmap()
         #await diagnose_redis_state()
         print("[STARTUP] Migration check complete")
 
@@ -441,7 +448,8 @@ def web():
         await init_checkboxes()
         checked, unchecked = await get_status()
 
-        asyncio.create_task(record_visitors(client_ip,user_agent, await get_geo(client_ip, redis), redis))
+        geo = await get_geo(client_ip, redis)
+        await record_visitors(client_ip,user_agent, geo, redis)
 
         first_chunk_html= await _render_chunk(client.id, offset=0)
 
@@ -555,43 +563,14 @@ def web():
         ]
         return diff_array
     
-    @app.get("/debug")
-    async def compare_list_vs_bitmap():
-        """ Compare old vs new bitmap - SLOW, only use for debugging"""
-        print("[DEBUG] Starting comparison...")
-
-        #count checked in old list 
-        all_values = await redis.lrange(checkboxes_key, 0, -1)
-        list_checked = sum(1 for v in all_values if json.loads(v))
-
-        bitmap_checked = await redis.bitcount(checkboxes_bitmap_key)
-
-        mismatches = []
-        for i in range(min(1000, N_CHECKBOXES)):
-            list_val = json.loads(all_values[i]) if i < len(all_values) else False
-            bitmap_val = bool(await redis.getbit(checkboxes_bitmap_key, i))
-            if list_val != bitmap_val:
-                mismatches.append(f"Index {i}: list={list_val}, bitmap={bitmap_val}")
-        
-        print(f"[DEBUG] List checked: {list_checked:,}")
-        print(f"[DEBUG] bitmap checked: {bitmap_checked:,}")
-        print(f"[DEBUG] Difference: {abs(list_checked - bitmap_checked):,}")
-
-        return fh.Main(
-            fh.H1("LIST vs Bitmap Comparison"),
-            fh.P(f"Old List: { list_checked:,} checked"),
-            fh.P(f"New Bitmap: {bitmap_checked:,} checked"),
-            fh.P(f"Difference: {abs(list_checked - bitmap_checked):,}"),
-            fh.H2("sample mismatches (first 1000 indices)"),
-            fh.Pre("\n".join(mismatches[:20]) if mismatches else "No mismatches found in sample"),
-            fh.P(f"Total mismatches in sample: {len(mismatches)}")
-        )
-
     @app.get("/visitors")
     async def visitors_page(request):
+        print("[VISITORS] Loading visitors page ...")
+
         recent_ips = await redis.zrange("recent_visitors_sorted", 0, 99, desc=True)
+        print("[VISITORS] Found {len(recent_ips)} IPs in sorted set")
+
         visitors = []
-        
         for ip in recent_ips:
             ip_str = ip.decode('utf-8') if isinstance(ip, bytes) else str(ip)
             visitors_raw = await redis.get(f"visitor:{ip_str}")
@@ -600,12 +579,15 @@ def web():
                 v["timestamp"] = float(v["timestamp"])
                 visitors.append(v)
 
+        print(f"[VISITORS] Loaded {len(visitors)} visitor records")
+
         total_visitors = await redis.get("total_visitors_count")
         total_count = int(total_visitors) if total_visitors else 0
+        print(f"[VISITORS] Total unique visitors: {total_count}")
 
         hour_stats = {}
         for v in visitors:
-            hour = time.strftime("%H:00", time.localtime(v["timestamp"]))
+            hour = time.strftime("%Y-%m-%d %H:00", time.localtime(v["timestamp"]))
             hour_stats[hour] = hour_stats.get(hour, 0) + 1
 
         sorted_hours = sorted(hour_stats.items(), key=lambda x:x[0], reverse=True)
@@ -623,7 +605,7 @@ def web():
                 fh.Td(v["city"] or "-"),
                 fh.Td(v.get("zip", "-")),
                 fh.Td(v["country"] or "-"),
-                fh.Td(time.strftime("%H:%M:%S", time.localtime(v["timestamp"]))),
+                fh.Td(time.strftime("%b %d, %H:%M:%S", time.localtime(v["timestamp"]))),
                 fh.Td(fh.Span(f"{v.get('visit_count', 1)}", cls="visit-badge")),
             )
             for v in visitors
@@ -631,13 +613,15 @@ def web():
 
         max_count = max([count for _,count in sorted_hours], default=1) if sorted_hours else 1
         chart_bars = []
-        for hour, count in sorted_hours[:24]:
+
+        for datetime_str, count in sorted_hours[:24]:
+            display_hour = time.strftime("%b %d, %H:00", time.strptime(datetime_str, "%Y-%m-%d %H:00"))
             percentage = (count/ max_count) * 100
 
             chart_bars.append(
                 fh.Div(
                     fh.Div(
-                        fh.Span(hour, cls="countrt-label"),
+                        fh.Span(display_hour, cls="countrt-label"),
                         fh.Span(f"{count} visitor{'s' if count != 1 else ''}", cls="country-count"),
                         cls="bar-labels"
                     ),
@@ -661,24 +645,18 @@ def web():
             chart_bars_days.append(
                 fh.Div(
                     fh.Div(
-                        fh.Span(display_date, cls="countrt-label"),
-                        fh.Span(f"{count} visitor{'s' if count != 1 else ''}", cls="country-count"),
-                        cls="bar-labels"
+                        style=f"height: {percentage}%",
+                        cls="bar-fill-vertical"
                     ),
-                    fh.Div(
-                        fh.Div(
-                            style=f"width: {percentage}%",
-                            cls="bar-fill"
-                        ),
-                        cls="bar-container"
-                ),
-                cls="chart-row"
-            )
+                    fh.Span(display_date, cls="bar-label-vertical"),
+                    cls="bar-vertical"
+                )    
         )
 
         return fh.Main(
             fh.H1("Recent Visitors Dashboard", cls="dashboard-title"),
 
+            #Total visitors card
             fh.Div(
                 fh.Div("Total Unique Visitors", cls="stats-label"),
                 fh.Div(f"{total_count:,}", cls="stats-number"),
@@ -686,16 +664,22 @@ def web():
                 cls="stats-card"
             ),
 
+            #vertical bar chart
             fh.Div(
                 fh.H2("Visitors by Day (Last 7 days)", cls="section-title"),
-                *chart_bars_days if chart_bars_days else [fh.P("No visitors data yet", style="text-align: center; color:#999;")],
-                cls="stats-card"),
+                fh.Div(
+                    *chart_bars_days if chart_bars_days else [fh.P("No visitors data yet", style="text-align: center; color:#999;")],
+                    cls="chart-bars-container"
+                ), 
+                cls="chart-container" 
+            ),
 
             fh.Div(
                 fh.H2("Visitors by Hour (Last 24 Hours)", cls="section-title"),
                 *chart_bars if chart_bars else [fh.P("No visitors data yet", style="text-align: center; color:#999;")],
-                cls="stats-card"),
+                cls="chart-container"),
 
+            #visitors table
             fh.Div(
                 fh.H2("Recent visitors", cls="sectioin-title"),
                 fh.Table(
@@ -717,7 +701,7 @@ def web():
             ),
             cls="visitors-container"
         )
-    
+        
     return app
 
 class Client:
