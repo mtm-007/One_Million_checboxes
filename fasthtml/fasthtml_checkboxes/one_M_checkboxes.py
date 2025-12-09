@@ -1,4 +1,3 @@
-
 import time
 from asyncio import Lock
 from pathlib import Path
@@ -301,6 +300,9 @@ def web():
                 pipe.rpush(checkboxes_key, *batch)
             await pipe.execute()
             print(f"[INIT] added {missing:,} missing checkboxes")
+    
+    async def init_bitmap():
+        """Ensure bitmap exists (optional -Redis creare)"""
 
     async def get_checkbox_range_cached(start_idx: int, end_idx:int):
         """ Load a specific range of chekcboxes, with caching"""
@@ -467,6 +469,9 @@ def web():
                     fh.NotStr(first_chunk_html), #preload first chunk
                     cls="grid-container",
                     id="grid-container",
+                    #critical for poll diffs
+                    hx_get=f"/diffs/{client.id}",
+                    hx_trigger="every 500ms",hx_swap="none"
                 ),
                 fh.Div("Made with FastHTML + Redis deployed with Modal", cls="footer"), 
                 cls="container", 
@@ -491,8 +496,8 @@ def web():
             print(f"[TOGGLE] index{i}: {current} -> {new_value}")
 
             try:
-                await redis.lset(checkboxes_key, i, json.dumps(new_value))
-                #update bitmap
+                #await redis.lset(checkboxes_key, i, json.dumps(new_value)) #old list for storing,deprecated
+                #update bitmap only
                 await redis.setbit(checkboxes_bitmap_key, i, 1 if new_value else 0)
 
                 bit_value = await redis.getbit(checkboxes_bitmap_key, i)
@@ -548,19 +553,24 @@ def web():
             client.heartbeat()
             diffs_list = client.pull_diffs()
         
-        await init_checkboxes()
+        #await init_checkboxes()
+        diff_array = []
+        for i in diffs_list:
+            #get fresh value from bitmap
+            bit = await redis.getbit(checkboxes_bitmap_key, i)
+            is_checked = bool(bit)
 
-        diff_array = [
-            fh.Input(   type="checkbox",
-                        id=f"cb-{i}",
-                        checked= checkbox_cache[i],
-                        # when clicked, that checkbox will send a POST request to the server with its index
-                        hx_post=f"/toggle/{i}/{client_id}", hx_swap="none",
-                        hx_swap_oob="true",# allows us to later push diffs to arbitrary checkboxes by id
-                        cls= "cb"
-                        )
-            for i in diffs_list
-        ]
+            diff_array.append(
+                fh.Input(   type="checkbox",
+                            id=f"cb-{i}",
+                            #checked= checkbox_cache[i], deprecated for list
+                            checked = is_checked, #uses bitmap
+                            hx_post=f"/toggle/{i}/{client_id}", hx_swap="none",
+                            hx_swap_oob="true",# allows us to later push diffs to arbitrary checkboxes by id
+                            cls= "cb"
+                            )
+            #for i in diffs_list
+        )
         return diff_array
     
     @app.get("/visitors")
@@ -605,8 +615,8 @@ def web():
                 fh.Td(v["city"] or "-"),
                 fh.Td(v.get("zip", "-")),
                 fh.Td(v["country"] or "-"),
-                fh.Td(time.strftime("%b %d, %H:%M:%S", time.localtime(v["timestamp"]))),
                 fh.Td(fh.Span(f"{v.get('visit_count', 1)}", cls="visit-badge")),
+                fh.Td(time.strftime("%b %d, %H:%M:%S", time.localtime(v["timestamp"]))),
             )
             for v in visitors
         ]
