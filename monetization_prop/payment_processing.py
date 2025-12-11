@@ -92,7 +92,7 @@ def checkout(file_id):
                 'currency': 'usd',
                 'unit_amount' : 35,
                 'product_data': {
-                    'name': 'Your Halloween  Inspiration',
+                    'name': 'Your Image',
                 },
             },
             'quantity': 1,
