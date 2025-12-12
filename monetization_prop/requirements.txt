@@ -11,16 +11,16 @@ flask-stripe == 0.1.0
 pillow == 10.1.0
 markdown == 3.5
 
-diffusers==0.30.3 
-torch==2.6.0
-transformers==4.57.3
-huggingface-hub==0.36.0
+diffusers==0.27.2#0.25
+torch==2.0.1
+transformers==4.31.0
+huggingface-hub==0.20.3
 invisible-watermark==0.2.0
-accelerate==1.12.0
+accelerate==0.21.0
 pandas==2.0.3
-torchvision==0.21.0
-numpy==1.26.4
+torchvision==0.15.2
+numpy==1.26.4#1.25.1
 fire==0.5.0
-opencv-python>=4.1.0.25
-mediapipe==0.10.13
-tokenizers==0.22.1
+opencv-python>=4.1.0.25 #4.11.0.86
+mediapipe==0.10.21#0.10.5
+tokenizers==0.12.0
