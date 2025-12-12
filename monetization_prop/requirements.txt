@@ -13,9 +13,9 @@ markdown == 3.5
 
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-diffusers==0.27.2  #0.25
+diffusers==0.28.0  #0.25
 ##torch==2.0.1
-transformers==4.31.0
+transformers==4.36.0
 huggingface-hub==0.20.3
 invisible-watermark==0.2.0
 accelerate==0.21.0

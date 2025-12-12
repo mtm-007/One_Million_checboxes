@@ -5,7 +5,7 @@ from diffusers import DiffusionPipeline
 class Predictor(BasePredictor):
     def setup(self)->None:
         """Load the model into memory to make running multiple predictions efficient"""
-        self.pipe = DiffusionPipeline.from_pretrained("my_diffusion_pipeline", torch_dtype=torch.float16)
+        self.pipe = DiffusionPipeline.from_pretrained("my_diffusion_pipeline", torch_dtype=torch.float32)#, local_files_only=True)
         if torch.cuda.is_available():
             self.pipe.to("cuda")
     
