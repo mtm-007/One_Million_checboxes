@@ -3,61 +3,20 @@
 
 build:
   gpu: True
-  #cuda: "11.8"
+  cuda: "11.8"
   python_version: "3.11"
   system_packages:
-    # - "libgl1-mesa-glx"
-    # - "ffmpeg"
-    # - "libsm6"
-    # - "libxext6"
     - "wget"
     - "git"
     - "libgl1"
     - "libglib2.0-0"
+    - "ffmpeg"
   
-  # python_packages:
-  #   - "uv"  # Install uv first
+  python_packages:
+    - "uv"  # Install uv first
   # Install uv and use it for faster package installation
-  # 1. Point to your new requirements.txt file
-  python_requirements: "requirements.txt"
-  
-  # 2. Specify the custom PyTorch URL using the official field
-  # pip_index_urls:
-  #   - "download.pytorch.org"
-  #run:
-   #- "uv pip install --system diffusers==0.28.2 huggingface-hub==0.20.2 accelerate==0.23.0 && rm -rf /root/.cache /tmp/* /var/tmp/* && apt-get clean && rm -rf /var/lib/apt/lists/* && find /usr/local -type d -name 'tests' -prune -exec rm -rf {} + || true && find /usr/local -type d -name 'test' -prune -exec rm -rf {} + || true && rm -rf /usr/share/doc/* /usr/share/man/*"
 
-    # - >-
-    #   uv pip install --system torch==2.0.1 torchvision==0.15.2 && rm -rf /root/.cache /tmp/* /var/tmp/* && apt-get clean && rm -rf /var/lib/apt/lists/* && find /usr/local -type d -name 'tests' -prune -exec rm -rf {} + || true && find /usr/local -type d -name 'test' -prune -exec rm -rf {} + || true && rm -rf /usr/share/doc/* /usr/share/man/*
-    # - >-
-    #   uv pip install --system diffusers==0.28.2 && rm -rf /root/.cache /tmp/* /var/tmp/* && apt-get clean && rm -rf /var/lib/apt/lists/* && find /usr/local -type d -name 'tests' -prune -exec rm -rf {} + || true && find /usr/local -type d -name 'test' -prune -exec rm -rf {} + || true && rm -rf /usr/share/doc/* /usr/share/man/*
-
-    #transformers==4.36.0 huggingface-hub==0.20.2 accelerate==0.21.0 && rm -rf /root/.cache /tmp/* /var/tmp/* && apt-get clean && rm -rf /var/lib/apt/lists/* && find /usr/local -type d -name 'tests' -prune -exec rm -rf {} + || true && find /usr/local -type d -name 'test' -prune -exec rm -rf {} + || true && rm -rf /usr/share/doc/* /usr/share/man/*
-    # - >- 
-    #   uv pip install --system
-    #   invisible-watermark==0.2.0
-    #   mediapipe==0.10.21 fire==0.5.0 Pillow
-    #   pandas==2.0.3 numpy==1.26.4 && rm -rf /root/.cache /tmp/* /var/tmp/* && apt-get clean && rm -rf /var/lib/apt/lists/* && find /usr/local -type d -name 'tests' -prune -exec rm -rf {} + || true && find /usr/local -type d -name 'test' -prune -exec rm -rf {} + || true && rm -rf /usr/share/doc/* /usr/share/man/*
-      
-    #- "uv pip install --system diffusers==0.28.2 torch==2.0.1 transformers==4.36.0 huggingface-hub==0.20.2 invisible-watermark==0.2.0 accelerate==0.23.0 pandas==2.0.3 torchvision==0.15.1 numpy==1.24.3 fire==0.5.0 Pillow mediapipe==0.10.3 && rm -rf /root/.cache /tmp/* /var/tmp/* && apt-get clean && rm -rf /var/lib/apt/lists/* && find /usr/local -type d -name 'tests' -prune -exec rm -rf {} + || true && find /usr/local -type d -name 'test' -prune -exec rm -rf {} + || true && rm -rf /usr/share/doc/* /usr/share/man/*"
-#     - pip install --no-cache-dir uv
-#     - uv pip install --system --no-cache-dir \
-#       diffusers==0.28.2 \
-#       transformers==4.36.0  \
-#       huggingface-hub==0.20.2 \
-#       invisible-watermark==0.2.0  \
-#       accelerate==0.21.0  \
-#       pandas==2.0.3 \
-#       torchvision==0.15.2 \
-#       numpy==1.26.4 \
-#       pandas==2.0.3 \
-#       fire==0.5.0 \
-#       mediapipe==0.10.21  \
-#       pillow  \
-#       torch==2.0.1  
-#     - "rm -rf /root/.cache"
-#     - "apt-get clean"
-#       #--index-url download.pytorch.org  \
-# image: "r8.im/mtm-007/cog-monetizationprop"
-        
+  run:
+    - "uv pip install --system diffusers==0.28.2 torch==2.0.1 transformers==4.36.0 huggingface-hub==0.20.2 invisible-watermark==0.2.0 accelerate==0.23.0 pandas==2.0.3 torchvision==0.15.1 numpy==1.24.3 fire==0.5.0 Pillow mediapipe==0.10.3 && rm -rf /root/.cache /tmp/* /var/tmp/* && apt-get clean && rm -rf /var/lib/apt/lists/* && find /usr/local -type d -name 'tests' -prune -exec rm -rf {} + || true && find /usr/local -type d -name 'test' -prune -exec rm -rf {} + || true && rm -rf /usr/share/doc/* /usr/share/man/*"
+#     
 predict: "predict.py:Predictor"
