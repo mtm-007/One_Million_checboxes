@@ -10,7 +10,9 @@ class Predictor(BasePredictor):
         start = time.time()
 
         print(f"[{time.time()- start:.2f}s] Loading pipeline...")
-        self.pipe = DiffusionPipeline.from_pretrained("my_diffusion_pipeline", torch_dtype=torch.float16)#, variant="fp16")#, local_files_only=True)
+        #self.pipe = DiffusionPipeline.from_pretrained("my_diffusion_pipeline", torch_dtype=torch.float16)#, variant="fp16")#, local_files_only=True)
+        #use directly from hf instead of donwloading first
+        self.pipe = DiffusionPipeline.from_pretrained("Johnowhitaker/rainbowdiffusion", torch_dtype=torch.float16)
         if torch.cuda.is_available():
             print(f"[{time.time()- start:.2f}s] Moving to cuda...")
             self.pipe.to("cuda")

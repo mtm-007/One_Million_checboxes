@@ -34,6 +34,36 @@ swin2sr-cache/
 weights-cache/
 tests/
 
+# Hugging Face / Torch caches
+.cache
+**/.cache
+**/.huggingface
+**/.torch
+
+# Python junk
+__pycache__
+*.pyc
+*.pyo
+
+# Virtual envs
+.env
+.venv
+env/
+venv/
+
+# Git
+.git
+.gitignore
+
+# Large artifacts
+*.bin
+*.pt
+*.ckpt
+*.safetensors
+
+# Not needed at runtime
+#download_model_weight.py
+
 __pycache__/
 *.pyc
 *.pyo
@@ -45,3 +75,9 @@ __pycache__/
 *.log
 output*.png
 .cache/
+
+*.bin
+*.safetensors
+models/
+checkpoints/
+outputs/

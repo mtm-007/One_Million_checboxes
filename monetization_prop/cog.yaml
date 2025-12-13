@@ -3,9 +3,10 @@
 
 build:
   gpu: True
-  cuda: "12.8"
+  #cuda: "12.8"
   python_version: "3.12"
   system_packages:
+    - "git"
     - "libgl1"
     - "libglib2.0-0"
     - "ffmpeg"
