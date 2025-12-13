@@ -3,12 +3,13 @@ import torch
 import time
 from diffusers import DiffusionPipeline
 
+
 class Predictor(BasePredictor):
     def setup(self)->None:
         """Load the model into memory to make running multiple predictions efficient"""
         print("===SETUP START TIME===")
         start = time.time()
-
+       
         print(f"[{time.time()- start:.2f}s] Loading pipeline...")
         #self.pipe = DiffusionPipeline.from_pretrained("my_diffusion_pipeline", torch_dtype=torch.float16)#, variant="fp16")#, local_files_only=True)
         #use directly from hf instead of donwloading first

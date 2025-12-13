@@ -29,8 +29,10 @@ authenticate replicate api
 sudo chown -R $USER:$USER .
 sudo cog push r8.im/<replicate_username>/<model_name>
 
+### check cog docker size
+docker images | grep cog-
 
-clean docker build images
+### clean docker build images
 docker rmi cog-monetizationprop cog-monetizationprop-base
 docker builder prune -f
 docker system prune -f
