@@ -26,8 +26,9 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__, static_folder='static', static_url_path='')
 
 #specify your apps urls
-#DOMAIN = ""
-DOMAIN = os.environ.get("DOMAIN", "http://localhost:5000")
+DOMAIN = "https://journalary-pamela-soundlessly.ngrok-free.dev"
+
+DOMAIN = os.environ.get("DOMAIN", "https://journalary-pamela-soundlessly.ngrok-free.dev")
 
 
 #app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
@@ -105,7 +106,6 @@ def upload():
 #checkout page
 @app.route("/checkout/<file_id>", methods=["GET"])
 def checkout(file_id):
-
     #check the file exists in the database
     file_info = db["content"].get(file_id)
     if not file_info:
@@ -118,7 +118,7 @@ def checkout(file_id):
 
     try:
         success_url=DOMAIN + '/success?session_id={CHECKOUT_SESSION_ID}'
-        cancel_url=DOMAIN+ '/cancel'
+        cancel_url=DOMAIN + '/cancel'
 
         print(f"Creating stripe session with:")
         print(f"   success_url: {success_url}")
@@ -139,7 +139,8 @@ def checkout(file_id):
             }],
             mode='payment',
             success_url=success_url,
-            cancel_url=cancel_url
+            cancel_url=cancel_url,
+            customer_email=email
         )
         print(f"Stripe session created: {session['id']}")
         print(f"Checkout URL: {session['url']}")
@@ -152,7 +153,7 @@ def checkout(file_id):
         return render_template("checkout.html",
                                session_id = session.id,
                                stripe_publishable_key=os.getenv("STRIPE_PUBLISHABLE_KEY"))
-        return redirect(session['url'])
+        #return redirect(session['url'], code=303)
     
     except stripe.error.StripeError as e:
         print(f"Stripe error: {e}")
@@ -270,8 +271,13 @@ def check_status(file_id):
     
 @app.route("/success")
 def success():
+    print("="*50)
+    print("SUCCESS ROUTE CALLED!")
+    print(f"Full URL: {request.url}")
+    print(f"Query params: {request.args}")
     session_id = request.args.get('session_id')
     print(f"Success page - session_id: {session_id}")
+    print("="*50)
 
     if not session_id:
         return "No session ID provided", 400
@@ -279,6 +285,9 @@ def success():
     try:
         #get the session id from stripe directly
         session = stripe.checkout.Session.retrieve(session_id)
+
+        if session.payment_status != 'paid':
+            return "Payment not completed", 400
 
         #the session contains metadata or we can search our orders, but first
         # lets reload the DB in case webhook already processed
@@ -289,59 +298,17 @@ def success():
         #try to find the order
         order = db["orders"].get(session_id)
         print(f"Found order: {order}")
+        
         if order:
             #find the file_id associated with this session
             file_id = order.get("file_id") 
             print(f"File ID: {file_id}")
-        else:
-            file_id = None
-            for order_id, order_data in db["orders"].items():
-                if order_id == session_id:
-                    file_id =order_data.get("file_id")
-                    break
-
-        if not file_id:
-            return render_template_string(""" 
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Payment Successful</title>
-                    <style>
-                        body {
-                            font-family: Arial, sans-serif;
-                            text-align: center;
-                            padding: 50px;
-                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                            min-height: 100vh;
-                        }
-                        .container {
-                            background: white;
-                            padding: 40px;
-                            border-radius: 10px;
-                            max-width: 500px;
-                            margin: 0 auto;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <h1>✓ Payment Successful!</h1>
-                        <p>Your order is being processed. Please check your email shortly for your generated image.</p>
-                        <p style="color: #999; margin-top: 20px;">This page will refresh automatically...</p>
-                        <p style="margin-top: 30px;">
-                            <a href='/' style="color: #667eea; text-decoration: none; font-weight: bold;">Create another image →</a>
-                        </p>
-                    </div>
-                    <script>
-                        setTimeout(function(){
-                            location.reload();
-                        }, 3000); // Reload after 3 seconds
-                    </script>
-                </body>
-                </html>
-        """)
-        return render_template("success.html", file_id=file_id)
-    
+            if file_id:
+                #order found, render success page with file tracking
+                return render_template("success.html", file_id=file_id)
+        
+        return render_template("processing.html")
+        
     except stripe.error.StripeError as e:
         print(f"Stripe error: {e}")
         return "Error retrieving payment session", 500

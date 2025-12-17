@@ -54,6 +54,9 @@ stripe version
 ##### login to verify access
 stripe login
 
+##### forward stripe cli to localhost
+stripe listen --forward-to localhost:5000/webhook
+
 
 ## ngrok installtion
 ```bash
