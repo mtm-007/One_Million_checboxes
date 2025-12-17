@@ -27,7 +27,6 @@ configuration.api_key['api-key'] = API_V3_KEY
 
 api_instance = sib_api_v3_sdk.TransactionalEmailsApi(sib_api_v3_sdk.ApiClient(configuration))
 
-
 #function to send the image to the user
 def send_email(subject, html, to_address=None, image_url=None):
 

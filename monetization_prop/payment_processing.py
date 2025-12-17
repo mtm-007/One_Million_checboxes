@@ -140,7 +140,9 @@ def checkout(file_id):
             mode='payment',
             success_url=success_url,
             cancel_url=cancel_url,
-            customer_email=email
+            customer_email=email,
+            #add metadata to help track order
+            metadata={'file_id': file_id}
         )
         print(f"Stripe session created: {session['id']}")
         print(f"Checkout URL: {session['url']}")
@@ -150,10 +152,10 @@ def checkout(file_id):
         save_db(db)
 
         #redirect to stripe checkout
-        return render_template("checkout.html",
-                               session_id = session.id,
-                               stripe_publishable_key=os.getenv("STRIPE_PUBLISHABLE_KEY"))
-        #return redirect(session['url'], code=303)
+        # return render_template("checkout.html",
+        #                        session_id = session.id,
+        #                        stripe_publishable_key=os.getenv("STRIPE_PUBLISHABLE_KEY"))
+        return redirect(session['url'], code=303)
     
     except stripe.error.StripeError as e:
         print(f"Stripe error: {e}")
