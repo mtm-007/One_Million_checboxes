@@ -9,11 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import stripe
 import markdown
-from fasthtml.common import*
-
-from faststripe.core import StripeApi
-from faststripe import StripeWebhook
- 
+from fasthtml.common import *
 from starlette.responses import RedirectResponse
 
 
@@ -32,8 +28,8 @@ app, rt = fast_app(
 
 DOMAIN = os.environ.get("DOMAIN", "https://journalary-pamela-soundlessly.ngrok-free.dev")
 #app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
-stripe_client = StripeApi(api_key=os.getenv("STRIPE_API_KEY"))
-stripe_webhook = StripeWebhook(secret=os.getenv("STRIPE_WEBHOOK_SECRET"))
+stripe.api_key = os.getenv("STRIPE_API_KEY")
+webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
 
 #----local db json 
 DB_FILE = "local_db.json"
@@ -73,8 +69,8 @@ def is_valid_email(email):
     return re.match(pattern, email) is not None
 
 #homepage
-@rt("/")
-def get():
+@app.get("/")
+def homepage():
     return Titled("AI Image Generator",
         Form(
             Div(
@@ -93,12 +89,9 @@ def get():
         )
     )
 
-# @app.route("/", methods=["GET"])
-# def home():
-#     return render_template("index.html")
 
-@rt("/upload")
-def post(email:str, prompt:str):
+@app.post("/upload")
+def upload(email:str, prompt:str):
     email = email.strip()
     prompt = prompt.strip()
 
@@ -118,13 +111,11 @@ def post(email:str, prompt:str):
 
 
 #checkout page
-#@app.route("/checkout/<file_id>", methods=["GET"])
-@rt("/checkout/{file_id}")
-def get(file_id:str):
+@app.get("/checkout/{file_id}")
+def checkout(file_id:str):
     #check the file exists in the database
     file_info = db["content"].get(file_id)
     if not file_info:
-    #if file_id not in db["content"].keys():
         return Titled("Error", P("Invalid file ID"), A("Go back", href="/")),404
     
     #pull out relevant info
@@ -139,7 +130,7 @@ def get(file_id:str):
         print(f"  cancel_url: {cancel_url}")
 
         #create stripe checkout session
-        session = stripe_client.checkout.sessions_post(
+        session = stripe.checkout.Session.create(
             payment_method_types = ["card"],
             line_items = [{
                 'price_data': {
@@ -170,19 +161,16 @@ def get(file_id:str):
         save_db(db)
 
         #redirect to stripe checkout
-        # return render_template("checkout.html",
-        #                        session_id = session.id,
-        #                        stripe_publishable_key=os.getenv("STRIPE_PUBLISHABLE_KEY"))
         return RedirectResponse(url=session['url'], status_code=303)
     
-    except Exception as e:
+    except stripe.error.StripeError as e:
         print(f"Stripe error: {e}")
         return Titled("Error", P("Payment system error. Please try again.")), 500
 
 #the page they'll see if payment is cancelled
 #@app.route("/cancel")
-@rt("/cancel")
-def get():
+@app.get("/cancel")
+def cancel():
     return Titled("Cancelled",
         P("Your payment was cancelled."),
         A("Go back to the homepage", href="/")
@@ -190,8 +178,8 @@ def get():
 
 
 #@app.route("/success")
-@rt("/success")
-def get(session_id: str = None):
+@app.get("/success")
+def success(session_id: str = None):
     print("="*50)
     print("SUCCESS ROUTE CALLED!")
     print(f"session_id: {session_id}")
@@ -202,8 +190,7 @@ def get(session_id: str = None):
     
     try:
         #get the session id from stripe directly
-        session = stripe_client.checkout.sessions_id_get(id=session_id)
-
+        session = stripe.checkout.Session.retrieve(session_id)
         if session.payment_status != 'paid':
             return Titled("Error", P("Payment not completed")), 400
 
@@ -234,14 +221,13 @@ def get(session_id: str = None):
                         const fileId = '{file_id}';
                         const checkStatus = async () => {{
                             try {{
-                                const response = await fetch(`/check_status/${{fileId}}`);
+                                const response = await fetch(`/check_status/${{{fileId}}}`);
                                 const data = await response.json();
-
-                                if(data.status ==='complete'){{
+                                if(data.status === 'complete'){{
                                     document.getElementById('status-container').innerHTML = `
                                         <h3> Your Image is Ready!</h3>
-                                        <p><strong>Prompt:</strong> ${{data.prompt}}</p>
-                                        <img src="${{data.image_url}}" alt = "Generated image" style="max-width: 100%; height: auto;">`;
+                                        <p><strong>Prompt:</strong> ${{{data.prompt}}}</p>
+                                        <img src="${{{data.image_url}}}" alt = "Generated image" style="max-width: 100%; height: auto;">`;
                                 }} else {{
                                     setTimeout(checkStatus, 3000);
                                 }}
@@ -256,14 +242,14 @@ def get(session_id: str = None):
         
         return Titled("Processing", P("Your payment was successful. Processing your image..."))
         
-    except Exception as e:
+    except stripe.error.StripeError as e:
         print(f"Stripe error: {e}")
         return Titled("Error", P("Error retrieving payment session")), 500
 
 
 #@app.route("/check_status/<file_id>", methods=["GET"])
-@rt("/check_status/{file_id}")
-def get(file_id):
+@app.get("/check_status/{file_id}")
+def check_status(file_id):
     """API endpoint to check if image processing is complete"""
     global db
     db = load_db()
@@ -300,12 +286,26 @@ def process_image(email, prompt,file_id):#filename,
     except Exception as e:
         print(f"Error starting image processing: {e}")
 
-#stripe webhook
-#@app.route("/webhook", methods=['POST'])
 
-@rt("/webhook")#, methods=["POST"])
-@stripe_webhook
-async def post(event):
+#@stripe_webhook
+@app.post("/webhook")#, methods=["POST"])
+async def stripe_webhook(request):
+
+    payload = await request.body()
+    sig_header = request.headers.get('Stripe-Signature')
+
+    #verify the stripe webhook signature
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, webhook_secret) 
+        
+    except ValueError as e:
+        print(f"Invalid payload: {e}")
+        return {'error': 'Invalid payload'}, 400
+    except stripe.error.SignatureVerificationError as e:
+        print(f"Invalid signature: {e}")
+        return {'error': 'Invalid signature'}, 400
+
     print(f"Received webhook event: {event['type']}")
 
     if event['type'] == 'checkout.session.completed':
@@ -330,17 +330,14 @@ async def post(event):
             process_image(content["email"], content["prompt"], file_id)#content["path"], 
             order["processed"] = True
             save_db(db) #when using local json db
-            print(f"Order marked as processed: {session}")
-
+            print(f"Order marked as processed: {session['id']}")
         return {'status': 'ok'}, 200
     # Add this return for other event types
     return {'status': 'event received'}, 200
         
 
-#show readme
-#@app.route('/readme')
-@rt("/readme")
-def get():
+@app.get("/readme")
+def readme():
     if os.path.exists("README.md"):
         with open("README.md", "r") as f:
             md_content = markdown.markdown(f.read(), extensions=["fenced_code"])
