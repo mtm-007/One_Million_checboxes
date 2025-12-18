@@ -1,55 +1,111 @@
 <!DOCTYPE html>
-<html>
-    <head>
-        <title>App Title</title>
-        <style>
-            body {
-            font-family: Arial, sans-serif;
-            margin: 40px;
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Image Generator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-        input, button {
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: #667eea;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 2em;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
             display: block;
-            margin-bottom: 15px;
-            padding: 10px;
-            width: 300px;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
         }
+        
+        input[type="email"],
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="email"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        textarea {
+            resize: vertical;
+            font-family: inherit;
+        }
+        
         button {
-            background-color: #4CAF50;
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: 600;
             cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
         }
+        
         button:hover {
-            background-color: #45a049;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
         }
-        h1, h2 {
-            color: #333;
+        
+        button:active {
+            transform: translateY(0);
         }
-        </style>
-    </head>
-    <body>
-        <h1>Your AI App</h1>
-        <p>Simply upload a photo, and our AI will do the rest! The results will be sent to the email address you provide -no
-            accounts to keep track of here.
-        </p>
-        <form action="/upload" method="post" enctype="multipart/form-data">
-            <label for="email">Email:</label>
-            <input type="email" id="email" name="email" required><br><br>
-            <label for="prompt">prompt:</label>
-            <input type="text" name="prompt" placeholder="Describe the image transformation" required><br><br>
-            <!-- <label for="file">File:</label>
-            <input type="file" id="file" name="file"><br><br> -->
-            <input type="submit" value="Buy Now ($3.50)">
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AI Image Generator</h1>
+        <form method="POST" action="/upload">
+            <div class="form-group">
+                <label for="email">Email:</label>
+                <input type="email" name="email" id="email" required>
+            </div>
+            <div class="form-group">
+                <label for="prompt">Prompt:</label>
+                <textarea name="prompt" id="prompt" rows="4" required placeholder="Describe the image you want to generate..."></textarea>
+            </div>
+            <button type="submit">Generate Image</button>
         </form>
-        <!-- <form action="/upload" method="post" enctype="multipart/form-data">
-            <input type="file" name="file" required>
-            <input type="text" name="email" placeholder="Your email" required>
-            <input type="text" name="prompt" placeholder="Enter prompt" required>
-            <button type="submit">Upload</button>
-          </form> -->
-          
-
-        <p>You probaly want some examples here...</p>
-        <h2><a href="/readme">What is this?</a></h2>
-    </body>
+    </div>
+</body>
 </html>

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Processing Payment</title>
+    <title>Error</title>
     <style>
         * {
             margin: 0;
@@ -31,13 +31,13 @@
             text-align: center;
         }
         
-        .processing-icon {
+        .error-icon {
             font-size: 4em;
             margin-bottom: 20px;
         }
         
         h1 {
-            color: #667eea;
+            color: #f44336;
             margin-bottom: 20px;
             font-size: 2em;
         }
@@ -48,28 +48,29 @@
             font-size: 1.1em;
         }
         
-        .loader {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            width: 60px;
-            height: 60px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto;
+        a {
+            display: inline-block;
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
         }
         
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        a:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="processing-icon">⏳</div>
-        <h1>Processing</h1>
-        <p>Your payment was successful. Processing your image...</p>
-        <div class="loader"></div>
+        <div class="error-icon">❌</div>
+        <h1>Error</h1>
+        <p>{{message}}</p>
+        <a href="{{back_link}}">Go Back</a>
     </div>
 </body>
 </html>

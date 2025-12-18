@@ -58,6 +58,9 @@ def db_init():
         os.mkdir("static")
     if not os.path.exists("content"):
         os.mkdir("content")
+    if not os.path.exists("templates"):
+        os.mkdir("templates")
+
 
 
 db_init()
@@ -68,26 +71,24 @@ def is_valid_email(email):
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return re.match(pattern, email) is not None
 
+def render_templates(template_name, **context):
+    """Read and render HTML template with context variables"""
+    template_path = os.path.join("templates", template_name)
+    if not os.path.exists(template_path):
+        return f"Template {template_name} not found"
+    
+    with open(template_path, "r") as f:
+        template_content = f.read()
+
+    for key, value in context.items():
+        template_content = template_content.replace(f"{{{{key}}}}", str(value))
+
+    return NotStr(template_content)
+
 #homepage
 @app.get("/")
 def homepage():
-    return Titled("AI Image Generator",
-        Form(
-            Div(
-                Label("Email:", For="email"),
-                Input(type="email", name="email", id="email", required=True),
-                cls="form-group"
-            ),
-            Div(
-                Label("Prompt:", For="prompt"),
-                Textarea(name="prompt", id="prompt", required=True, rows=4),
-                cls="form-group"
-            ),
-            Button("Generate Image", type="submit"),
-            method= "POST",
-            action="/upload"
-        )
-    )
+    return render_templates("index.html")
 
 
 @app.post("/upload")
@@ -96,7 +97,9 @@ def upload(email:str, prompt:str):
     prompt = prompt.strip()
 
     if not email or not prompt:
-        return Titled("Error", P("Email and prompt are required"), A("Go back",href="/"))
+        return render_templates("error.html", 
+                                message="Email and prompt are required",
+                                back_link="/")
 
     unique_id = str(uuid4())
     #add the unique_id and filename + email to the database
@@ -116,7 +119,7 @@ def checkout(file_id:str):
     #check the file exists in the database
     file_info = db["content"].get(file_id)
     if not file_info:
-        return Titled("Error", P("Invalid file ID"), A("Go back", href="/")),404
+        return render_templates("error.html", message ="Invalid file ID", back_link="/")
     
     #pull out relevant info
     email = file_info["email"]
@@ -165,16 +168,16 @@ def checkout(file_id:str):
     
     except stripe.error.StripeError as e:
         print(f"Stripe error: {e}")
-        return Titled("Error", P("Payment system error. Please try again.")), 500
+        return render_templates("error.html",
+                                message="Payment system error. Please try again.",
+                                back_link="/")
+    
 
 #the page they'll see if payment is cancelled
 #@app.route("/cancel")
 @app.get("/cancel")
 def cancel():
-    return Titled("Cancelled",
-        P("Your payment was cancelled."),
-        A("Go back to the homepage", href="/")
-    )
+    return render_templates("cancel.html")
 
 
 #@app.route("/success")
@@ -186,13 +189,16 @@ def success(session_id: str = None):
     print("="*50)
 
     if not session_id:
-        return Titled("Error", P("No session ID provided")), 400
-    
+        return render_templates("error.html",
+                                message="No session ID provided",
+                                back_link="/")
     try:
         #get the session id from stripe directly
         session = stripe.checkout.Session.retrieve(session_id)
         if session.payment_status != 'paid':
-            return Titled("Error", P("Payment not completed")), 400
+            return render_templates("error.html", 
+                                    message="Payment not completed",
+                                    back_link="/")
 
         #the session contains metadata or we can search our orders, but first
         # lets reload the DB in case webhook already processed
@@ -210,41 +216,15 @@ def success(session_id: str = None):
             print(f"File ID: {file_id}")
             if file_id:
                 #order found, render success page with file tracking
-                return Titled("Success!" ,
-                    P("Payment successful! Your image is being generated."),
-                    Div(
-                        P("Processing...", id="status-text"),
-                        id="status-container",
-                        cls="status-checking"
-                        ),
-                    Script(f""" 
-                        const fileId = '{file_id}';
-                        const checkStatus = async () => {{
-                            try {{
-                                const response = await fetch(`/check_status/${{{fileId}}}`);
-                                const data = await response.json();
-                                if(data.status === 'complete'){{
-                                    document.getElementById('status-container').innerHTML = `
-                                        <h3> Your Image is Ready!</h3>
-                                        <p><strong>Prompt:</strong> ${{{data.prompt}}}</p>
-                                        <img src="${{{data.image_url}}}" alt = "Generated image" style="max-width: 100%; height: auto;">`;
-                                }} else {{
-                                    setTimeout(checkStatus, 3000);
-                                }}
-                            }} catch (error){{
-                                console.error('Error checking status:', error);
-                                setTimeout(checkStatus, 5000);
-                            }}
-                        }};
-                        checkStatus();
-                    """)
-                )
+                return render_templates("success.html", file_id=file_id)
         
-        return Titled("Processing", P("Your payment was successful. Processing your image..."))
+        return render_templates("processing.html")
         
     except stripe.error.StripeError as e:
         print(f"Stripe error: {e}")
-        return Titled("Error", P("Error retrieving payment session")), 500
+        return render_templates("error.html", 
+                                message = "Error retrieving payment session",
+                                back_link="/")
 
 
 #@app.route("/check_status/<file_id>", methods=["GET"])

@@ -1,232 +1,135 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Payment Successful</title>
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Success - Payment Complete</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
         body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            padding: 50px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
         }
+        
         .container {
             background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
             padding: 40px;
-            border-radius: 10px;
             max-width: 600px;
-            margin: 0 auto;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            width: 100%;
         }
-        .checkmark {
-            font-size: 60px;
-            color: #4CAF50;
+        
+        h1 {
+            color: #4caf50;
+            margin-bottom: 20px;
+            text-align: center;
+            font-size: 2.5em;
+        }
+        
+        .success-icon {
+            text-align: center;
+            font-size: 4em;
             margin-bottom: 20px;
         }
-        .spinner {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
+        
+        p {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        
+        #status-container {
+            background: #f5f5f5;
+            border-radius: 12px;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .status-checking {
+            color: #667eea;
+        }
+        
+        #status-text {
+            font-size: 1.2em;
+            margin-bottom: 10px;
+        }
+        
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
             border-radius: 50%;
             width: 40px;
             height: 40px;
             animation: spin 1s linear infinite;
             margin: 20px auto;
         }
+        
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: scale(0.9); }
-            to { opacity: 1; transform: scale(1); }
-        }
-        h1 {
-            color: #333;
-            margin: 10px 0 20px 0;
-        }
-        p {
-            color: #666;
-            line-height: 1.6;
-        }
-        .status-message {
-            color: #999;
-            font-size: 14px;
-            margin-top: 20px;
-        }
-        .image-container {
-            display: none;
-            margin-top: 30px;
-            animation: fadeIn 0.5s ease-in;
-        }
-        .image-container.show {
-            display: block;
-        }
-        .generated-image {
+        
+        img {
             max-width: 100%;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            margin-bottom: 20px;
-        }
-        .prompt-display {
-            background: #f5f5f5;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 20px 0;
-            color: #555;
-            font-style: italic;
-        }
-        .download-btn {
-            display: inline-block;
-            background: #667eea;
-            color: white;
-            padding: 12px 30px;
-            border-radius: 5px;
-            text-decoration: none;
-            font-weight: bold;
-            margin-top: 15px;
-            transition: background 0.3s;
-        }
-        .download-btn:hover {
-            background: #5568d3;
-        }
-        a {
-            color: #667eea;
-            text-decoration: none;
-            font-weight: bold;
-        }
-        a:hover {
-            text-decoration: underline;
-        }
-        .loading-section {
-            display: block;
-        }
-        .loading-section.hide {
-            display: none;
-        }
-        .attempt-count {
-            color: #999;
-            font-size: 12px;
-            margin-top: 10px;
-        }
-        .error-message {
-            color: #e74c3c;
-            background: #fadbd8;
-            padding: 15px;
-            border-radius: 5px;
+            height: auto;
+            border-radius: 12px;
             margin-top: 20px;
-            display: none;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
-        .error-message.show {
-            display: block;
+        
+        h3 {
+            color: #4caf50;
+            margin-bottom: 15px;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="checkmark">✓</div>
-        <h1>Payment Successful!</h1>
+        <div class="success-icon">✅</div>
+        <h1>Success!</h1>
+        <p>Payment successful! Your image is being generated.</p>
         
-        <!-- Loading Section -->
-        <div class="loading-section" id="loadingSection">
-            <div class="spinner"></div>
-            <p>Your AI image is being generated...</p>
-            <p class="status-message">This usually takes 30-60 seconds</p>
-            <p class="attempt-count">Checking... <span id="attempts">0</span></p>
+        <div id="status-container" class="status-checking">
+            <p id="status-text">Processing...</p>
+            <div class="loader"></div>
         </div>
-        
-        <!-- Image Display Section (hidden initially) -->
-        <div class="image-container" id="imageContainer">
-            <h2>Your Image is Ready! 🎉</h2>
-            <div class="prompt-display" id="promptDisplay"></div>
-            <img id="generatedImage" class="generated-image" alt="Generated AI Image">
-            <br>
-            <a id="downloadLink" class="download-btn" download>Download Image</a>
-        </div>
-        
-        <!-- Error Section -->
-        <div class="error-message" id="errorMessage">
-            <p><strong>Image generation is taking longer than expected.</strong></p>
-            <p>Your image has been sent to your email. Please check your inbox.</p>
-        </div>
-        
-        <p style="margin-top: 30px;">
-            <a href='/'>← Create another image</a>
-        </p>
     </div>
-
+    
     <script>
-        const fileId = '{{ file_id }}';
-        let attempts = 0;
-        const maxAttempts = 60; // Check for up to 3 minutes (60 attempts * 3 seconds)
+        const fileId = '{{file_id}}';
         
-        function checkStatus() {
-            attempts++;
-            document.getElementById('attempts').textContent = attempts;
-            
-            // Check if max attempts reached
-            if (attempts >= maxAttempts) {
-                document.querySelector('.spinner').style.display = 'none';
-                document.getElementById('loadingSection').classList.add('hide');
-                document.getElementById('errorMessage').classList.add('show');
-                return;
-            }
-            
-            // Call the check_status endpoint
-            fetch(`/check_status/${fileId}`)
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Status check:', data);
-                    
-                    if (data.status === 'complete' && data.image_url) {
-                        // Image is ready! Show it
-                        showImage(data.image_url, data.prompt);
-                    } else if (data.status === 'processing') {
-                        // Still processing, check again
-                        setTimeout(checkStatus, 3000);
-                    } else if (data.status === 'not_found') {
-                        // File not found
-                        document.getElementById('loadingSection').classList.add('hide');
-                        document.getElementById('errorMessage').innerHTML = 
-                            '<p><strong>Error:</strong> Order not found.</p>';
-                        document.getElementById('errorMessage').classList.add('show');
-                    }
-                })
-                .catch(error => {
-                    console.error('Error checking status:', error);
-                    // Continue checking despite error
+        const checkStatus = async () => {
+            try {
+                const response = await fetch(`/check_status/${fileId}`);
+                const data = await response.json();
+                
+                if(data.status === 'complete') {
+                    document.getElementById('status-container').innerHTML = `
+                        <h3>Your Image is Ready!</h3>
+                        <p><strong>Prompt:</strong> ${data.prompt}</p>
+                        <img src="${data.image_url}" alt="Generated image">
+                    `;
+                } else {
                     setTimeout(checkStatus, 3000);
-                });
-        }
-        
-        function showImage(imageUrl, prompt) {
-            // Hide loading section
-            document.getElementById('loadingSection').classList.add('hide');
-            
-            // Show image section
-            const imageContainer = document.getElementById('imageContainer');
-            const img = document.getElementById('generatedImage');
-            const downloadLink = document.getElementById('downloadLink');
-            const promptDisplay = document.getElementById('promptDisplay');
-            
-            // Set image source
-            img.src = imageUrl;
-            
-            // Set download link
-            downloadLink.href = imageUrl;
-            downloadLink.download = `ai-generated-${fileId}.png`;
-            
-            // Display the prompt
-            if (prompt) {
-                promptDisplay.textContent = `Prompt: "${prompt}"`;
+                }
+            } catch (error) {
+                console.error('Error checking status:', error);
+                setTimeout(checkStatus, 5000);
             }
-            
-            // Show the container with animation
-            imageContainer.classList.add('show');
-        }
+        };
         
-        // Start checking status immediately
         checkStatus();
     </script>
 </body>
