@@ -43,7 +43,7 @@ async def get_geo_from_providers(ip:str, redis):
         if r.status_code == 200:
             data = r.json()
             if "country_name" in data:
-                await redis.set(f"geo:{ip}", json.dumps(data), ex=86400)
+                await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
                 return data
     except Exception:
         pass
@@ -55,7 +55,7 @@ async def get_geo_from_providers(ip:str, redis):
         if r.status_code == 200:
             data = r.json()
             if data.get("status") == "success":
-                await redis.set(f"geo:{ip}", json.dumps(data), ex=86400)
+                await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
                 return data
     except Exception:
         pass
@@ -71,7 +71,7 @@ async def get_geo(ip: str, redis):
     #fetch from providers and cache
     data = await get_geo_from_providers(ip,redis)
     try:
-        await redis.set(f"geo:{ip}", json.dumps(data), ex=GEO_TTL_REDIS)
+        await redis.set(f"geo:{ip}", json.dumps(data)) #save get_geo api calls to providers #, ex=GEO_TTL_REDIS)
     except Exception:
         pass
     return data
@@ -101,9 +101,10 @@ async def record_visitors(ip, user_agent, geo, redis):
             "visit_count" : visit_count,
         }
 
-        await redis.setex(visitors_key, 86400, json.dumps(entry)) #store/update this visitor, expired in 24 hrs
+        #await redis.setex(visitors_key, 86400, json.dumps(entry)) #store/update this visitor, expired in 24 hrs
+        await redis.set(visitors_key, json.dumps(entry)) #save permanently
         await redis.zadd("recent_visitors_sorted", {ip:time.time()}) #maintain a sorted set by timestamp
-        await redis.zremrangebyrank("recent_visitors_sorted", 0,-101) #keep only last 100
+        #await redis.zremrangebyrank("recent_visitors_sorted", 0,-101) #keep only last 100
 
         if is_new_visitor:
             await redis.incr("total_visitors_count")
@@ -164,7 +165,7 @@ def web():
             "--bind","127.0.0.1", 
             "--port", "6379", 
             "--dir", "/data", #store data in persistent volume
-            "--save", "86400", "1", #save once per day
+            "--save", "60", "1", #save every minute, if 1 change
             "--save", "" ] #disable all other automatic saves
         ,
         stdout=subprocess.DEVNULL,
@@ -180,6 +181,8 @@ def web():
         """Run migration on startup"""
         #await migrate_litst_to_bitmap()
         #await diagnose_redis_state()
+        await redis.setbit(checkboxes_bitmap_key, N_CHECKBOXES - 1, 0)
+        print("[STARTUP] Bitmap initialized/verified")
         print("[STARTUP] Migration check complete")
 
     async def migrate_litst_to_bitmap():
@@ -286,23 +289,24 @@ def web():
         
         print("="*50 + "\n")
     
-    async def init_checkboxes():
-        """Initilize Redis list if needed, but DON'T load all into memory """
-        current_len = await redis.llen(checkboxes_key)
-        if current_len < N_CHECKBOXES:
-            #print(f"[CACHE] Initializing {N_CHECKBOXES:,} checkboxes...")
-            print(f"[INIT] Redis list too short ({current_len:,}), padding to {N_CHECKBOXES:,}...")
-            missing = N_CHECKBOXES - current_len
-            pipe = redis.pipeline()
-            batch_size = 10000
-            for i in range(0, missing, batch_size):
-                batch = [json.dumps(False)] * min(batch_size, missing -i)
-                pipe.rpush(checkboxes_key, *batch)
-            await pipe.execute()
-            print(f"[INIT] added {missing:,} missing checkboxes")
+    # async def init_checkboxes():
+    #     """Initilize Redis list if needed, but DON'T load all into memory """
+    #     current_len = await redis.llen(checkboxes_key)
+    #     if current_len < N_CHECKBOXES:
+    #         #print(f"[CACHE] Initializing {N_CHECKBOXES:,} checkboxes...")
+    #         print(f"[INIT] Redis list too short ({current_len:,}), padding to {N_CHECKBOXES:,}...")
+    #         missing = N_CHECKBOXES - current_len
+    #         pipe = redis.pipeline()
+    #         batch_size = 10000
+    #         for i in range(0, missing, batch_size):
+    #             batch = [json.dumps(False)] * min(batch_size, missing -i)
+    #             pipe.rpush(checkboxes_key, *batch)
+    #         await pipe.execute()
+    #         print(f"[INIT] added {missing:,} missing checkboxes")
     
     async def init_bitmap():
         """Ensure bitmap exists (optional -Redis creare)"""
+        #await redis.setbit(checkboxes_bitmap_key, N_CHECKBOXES - 1, 0)
 
     async def get_checkbox_range_cached(start_idx: int, end_idx:int):
         """ Load a specific range of chekcboxes, with caching"""
@@ -404,7 +408,7 @@ def web():
     
     async def _render_chunk(client_id:str, offset:int)->str:
         #lazy load a chunk of checkboxes
-        await init_checkboxes()
+        #await init_checkboxes()
 
         start_idx = offset
         end_idx = min(offset + LOAD_MORE_SIZE, N_CHECKBOXES)
@@ -447,7 +451,7 @@ def web():
             clients[client.id] = client
 
         #Load checkboxes immediately
-        await init_checkboxes()
+        #await init_checkboxes()
         checked, unchecked = await get_status()
 
         geo = await get_geo(client_ip, redis)
