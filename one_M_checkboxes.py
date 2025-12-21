@@ -107,7 +107,7 @@ async def record_visitors(ip, user_agent, geo, redis):
             "user_agent": user_agent[:120],
             "city": geo.get("city") or geo.get("region", "Unknown"),
             "zip": geo.get("postal") or geo.get("zip") or "-",
-            "is_vpn": get.get("is_vpn", False),
+            "is_vpn": geo.get("is_vpn", False),
             "country": geo.get("country") or geo.get("country_name"),
             "timestamp": time.time(),
             "visit_count" : visit_count,
@@ -119,9 +119,9 @@ async def record_visitors(ip, user_agent, geo, redis):
 
         if is_new_visitor:
             await redis.incr("total_visitors_count")
-            print(f"[VISITOR]New visitor from {geo.get('city', 'Unknown',)}, {geo.get('country', 'Unknown')}")
+            print(f"[VISITOR] New visitor from {geo.get('city', 'Unknown',)}, {geo.get('country', 'Unknown')}")
         else:
-            print(f"[VISITOR]Returning visitor {ip}  (visit #{visit_count}")
+            print(f"[VISITOR] Returning visitor {ip}  (visit #{visit_count}")
 
     except Exception as e:
         print(f"[ERROR] Failed to record visitor: {e}")
@@ -458,11 +458,11 @@ def web():
     
     @app.get("/visitors")
     async def visitors_page(request, offset: int = 0, limit: int = 100):
-        print("[VISITORS] Loading visitors page (offset={offset}, limit={limit})..")
+        print(f"[VISITORS] Loading visitors page (offset={offset}, limit={limit})..")
 
         #get visitors with pagination
         recent_ips = await redis.zrange("recent_visitors_sorted", offset, offset + limit - 1, desc=True)
-        print("[VISITORS] Found {len(recent_ips)} IPs in sorted set")
+        print(f"[VISITORS] Found {len(recent_ips)} IPs in sorted set")
 
         visitors = []
         for ip in recent_ips:
@@ -479,7 +479,7 @@ def web():
         total_in_db = await redis.zcard("recent_visitors_sorted")
         total_visitors = await redis.get("total_visitors_count")
         total_count = int(total_visitors) if total_visitors else 0
-        print(f"[VISITORS] Total unique visitors: {total_count}, in DB: {total_visitors}")
+        print(f"[VISITORS] Total unique visitors: {total_count}, in DB: {total_in_db}")
 
         #calculate if there are more visitors to load
         has_more = (offset + limit) < total_in_db
@@ -489,7 +489,7 @@ def web():
         #Day status
         day_stats = {}
         for v in visitors:
-            day = time.strftime("%Y-%m-%d %H:00", time.localtime(v["timestamp"]))
+            day = time.strftime("%Y-%m-%d", time.localtime(v["timestamp"]))
             day_stats[day] = day_stats.get(day, 0) + 1
 
         sorted_days = sorted(day_stats.items(), key=lambda x:x[0], reverse=True)
@@ -583,7 +583,7 @@ def web():
                 fh.A("50", href=f"/visitors?offset=0&limit=50",
                     cls="limit-btn" + (" active" if limit == 50 else "")),
                 fh.A("100", href=f"/visitors?offset=0&limit=100",
-                    cls="limit-btn" + " active" if limit == 100 else ""),
+                    cls="limit-btn" + (" active" if limit == 100 else "")),
                 fh.A("200", href=f"/visitors?offset=0&limit=200",
                     cls="limit-btn" + (" active" if limit == 200 else "")), 
                 fh.A("500", href=f"/visitors?offset=0&limit=500",
