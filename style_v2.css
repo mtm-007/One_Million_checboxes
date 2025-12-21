@@ -130,7 +130,7 @@ h1 {
    VISITORS PAGE STYLES
    ============================================ */
 
-   .visitors-container {
+.visitors-container {
     max-width: 1200px;
     margin: 0 auto;
     padding: 20px;
@@ -184,59 +184,65 @@ h1 {
     display: inline-block;
 }
 
-/* Chart Container */
-.chart-container {
-    background: white;
-    padding: 20px;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    margin: 20px 0;
+.badge {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: bold;
+    text-transform: uppercase;
 }
-
-/* Vertical Bar Chart */
+.badge-vpn {
+    background-color: #fed7d7;
+    color: #c53030;
+    border: 1px solid #fc8181;
+}
+.badge-clear {
+    background-color: #f0fff4;
+    color: #2f855a;
+    border: 1px solid #9ae6b4;
+    opacity: 0.7;
+}
 .chart-bars-container {
     display: flex;
     align-items: flex-end;
     justify-content: space-around;
-    height: 300px;
-    gap: 5px;
-    padding: 20px 10px;
-    border-bottom: 2px solid #ddd;
+    height: 200px;
+    padding-top: 20px;
+    border-bottom: 2px solid #eee;
 }
 
 .bar-vertical {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: flex-end;
-    flex: 1;
-    min-width: 30px;
-    max-width: 60px;
+    width: 12%;
     height: 100%;
 }
 
 .bar-fill-vertical {
     width: 100%;
-    background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(to top, #667eea, #764ba2);
     border-radius: 4px 4px 0 0;
+    position: relative;
     transition: height 0.3s ease;
-    min-height: 2px;
 }
 
-.bar-vertical:hover .bar-fill-vertical {
-    background: linear-gradient(180deg, #764ba2 0%, #667eea 100%);
+.bar-value {
+    position: absolute;
+    top: -20px;
+    width: 100%;
+    text-align: center;
+    font-size: 0.7rem;
+    font-weight: bold;
+    color: #4a5568;
 }
 
 .bar-label-vertical {
-    margin-top: 5px;
-    font-size: 0.75em;
-    color: #666;
-    font-weight: 600;
-    transform: rotate(-45deg);
-    transform-origin: center;
+    font-size: 0.65rem;
+    margin-top: 8px;
+    color: #718096;
     white-space: nowrap;
 }
-
 /* Visitors Table */
 .table {
     width: 100%;
@@ -270,6 +276,26 @@ h1 {
     border-bottom: none;
 }
 
+/* Day Separator in Visitors Table */
+.day-separator {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-top: 3px solid #667eea;
+    border-bottom: 2px solid #e0e0e0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+    text-align: left;
+    padding: 15px 12px !important;
+}
+
+.day-separator:hover {
+    background: linear-gradient(135deg, #f0f1f3 0%, #e2e5e8 100%);
+}
+
+.visitor-row:hover {
+    background: #f9f9f9;
+}
+
 /* Back Link */
 .back-link {
     color: #667eea;
@@ -282,6 +308,91 @@ h1 {
 
 .back-link:hover {
     color: #764ba2;
+}
+
+/* ============================================
+   PAGINATION STYLES
+   ============================================ */
+
+.pagination-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    align-items: center;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    margin: 20px 0;
+}
+
+.pagination-controls {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.pagination-btn {
+    padding: 8px 16px;
+    background: #667eea;
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.pagination-btn:hover:not(.disabled) {
+    background: #5568d3;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+}
+
+.pagination-btn.disabled {
+    background: #ccc;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.pagination-info {
+    padding: 8px 16px;
+    background: white;
+    border-radius: 6px;
+    font-weight: 500;
+    color: #333;
+    border: 1px solid #e0e0e0;
+}
+
+.limit-controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.limit-btn {
+    padding: 6px 12px;
+    background: white;
+    color: #667eea;
+    text-decoration: none;
+    border: 2px solid #667eea;
+    border-radius: 6px;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.limit-btn:hover {
+    background: #667eea;
+    color: white;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+}
+
+.limit-btn.active {
+    background: #667eea;
+    color: white;
 }
 
 /* Responsive Design for Visitors Page */
@@ -317,5 +428,28 @@ h1 {
     
     .table th, .table td {
         padding: 8px;
+    }
+    
+    .pagination-wrapper {
+        padding: 15px 10px;
+    }
+    
+    .pagination-controls {
+        gap: 10px;
+    }
+    
+    .pagination-btn,
+    .pagination-info {
+        padding: 6px 12px;
+        font-size: 0.9em;
+    }
+    
+    .limit-controls {
+        gap: 5px;
+    }
+    
+    .limit-btn {
+        padding: 5px 10px;
+        font-size: 0.85em;
     }
 }

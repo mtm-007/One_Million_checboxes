@@ -2,6 +2,7 @@ import time
 from asyncio import Lock
 from pathlib import Path
 from uuid import uuid4
+
 import modal
 from modal import Image
 import fasthtml.common as fh
@@ -39,15 +40,31 @@ async def get_geo_from_providers(ip:str, redis):
     #primary provider
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"https://ipwho.is/{ip}")
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("success"):
+                #normalize the data to match entry format
+                return{
+                    "ip": ip,
+                    "city": data.get("city"),
+                    "postal": data.get("postal"),
+                    "country": data.get("country"),
+                    "region": data.get("region"),
+                    "is_vpn": data.get("security", {}).get("vpn", False),
+                    "isp": data.get("connection", {}).get("isp"),
+                }
+    except Exception: pass
+    #second provider
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
             r = await client.get(f"https://ipapi.co/{ip}/json/")
         if r.status_code == 200:
             data = r.json()
             if "country_name" in data:
                 await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
                 return data
-    except Exception:
-        pass
-
+    except Exception: pass
     #Fallback provider
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -57,8 +74,7 @@ async def get_geo_from_providers(ip:str, redis):
             if data.get("status") == "success":
                 await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
                 return data
-    except Exception:
-        pass
+    except Exception: pass
     #last resort 
     return {"ip": ip, "city": None, "country": None, "zip": None}
 
@@ -81,27 +97,22 @@ async def record_visitors(ip, user_agent, geo, redis):
     """ Record visitor with visit count tracking"""
     try:
         visitors_key = f"visitor:{ip}"
-
         existing = await redis.get(visitors_key)
         is_new_visitor = existing is None
 
-        if existing:
-            existing_data = json.loads(existing)
-            visit_count = existing_data.get("visit_count", 1) + 1
-        else:
-            visit_count = 1
-
+        visit_count = (json.loads(existing).get("visit_count", 1) + 1) if existing else 1
+        
         entry = {
             "ip": ip,
             "user_agent": user_agent[:120],
-            "city": geo.get("city"),
-            "zip": geo.get("postal") or geo.get("zip"),
+            "city": geo.get("city") or geo.get("region", "Unknown"),
+            "zip": geo.get("postal") or geo.get("zip") or "-",
+            "is_vpn": get.get("is_vpn", False),
             "country": geo.get("country") or geo.get("country_name"),
             "timestamp": time.time(),
             "visit_count" : visit_count,
         }
 
-        #await redis.setex(visitors_key, 86400, json.dumps(entry)) #store/update this visitor, expired in 24 hrs
         await redis.set(visitors_key, json.dumps(entry)) #save permanently
         await redis.zadd("recent_visitors_sorted", {ip:time.time()}) #maintain a sorted set by timestamp
         #await redis.zremrangebyrank("recent_visitors_sorted", 0,-101) #keep only last 100
@@ -185,124 +196,6 @@ def web():
         print("[STARTUP] Bitmap initialized/verified")
         print("[STARTUP] Migration check complete")
 
-    async def migrate_litst_to_bitmap():
-        """one-time migration from redis to bitmap"""
-
-        old_key = "checkboxes"
-        new_key= "checkboxes_bitmap"
-
-        #temporarily: Force re-migration
-        # await redis.delete(new_key)
-        # print("[MIGRATE] Deleted existing bitmap to force fresh migration")
-
-        #check if migration is needed
-        list_exists= await redis.exists(old_key)
-        bitmap_exists = await redis.exists(new_key)
-
-        if not list_exists:
-            print("[MIGRATE] No old data")
-            return
-        if bitmap_exists:
-            print(f"[MIGRATE] Bitmap already exists,skipping migration")
-            return
-        
-        print(f"[MIGRATE] Starting migration from list to bitmap...")
-        start_time = time.time()
-
-        #load all values from list
-        list_len = await redis.llen(old_key)
-        print(f"[MIGRATE] found {list_len:,} checkboxes in list")
-
-        #process in batches
-        batch_size = 10000
-        pipe = redis.pipeline()
-        batch_count = 0
-
-        for batch_start in range(0, list_len, batch_size):
-            batch_end = min(batch_start + batch_size, list_len)
-
-            values = await redis.lrange(old_key, batch_start, batch_end - 1)
-
-            #set bits in bitmap
-            for i, value in enumerate(values):
-                idx = batch_start + i
-                is_checked = json.loads(value) if value else False
-                if is_checked:
-                    pipe.setbit(new_key, idx, 1)
-                    batch_count += 1
-
-            #execute batch
-            await pipe.execute()
-            pipe = redis.pipeline() #reset pipeline
-
-            if batch_start % 100000 ==0:
-                print(f"[MIGRATE] Progress: {batch_start:,}/{list_len:,}")
-
-        elapsed_time = time.time() - start_time
-        print(f"[MIGRATE] Migration complete in {elapsed_time:.2f}s")
-
-        #verify
-        bitmap_count = await redis.bitcount(new_key)
-        print(f"[MIGRATE] Bitmap has {bitmap_count:,} checked checkboxes")
-        print(f"[MIGRATE] Bitmap has {batch_count:,} checked checkboxes")
-
-        if bitmap_count != batch_count:
-            print(f"[MIGRATE] ⚠️ Warning: Mismatch! Expected {batch_count}, got {bitmap_count}")
-
-        #delete old list to save space
-        # await redis.delete(old_key)
-        # print(f"[MIGRATE] Deleted old list")
-
-    async def diagnose_redis_state():
-        """Check what's in Redis"""
-        print("\n" + "="*50)
-        print("REDIS DIAGNOSTIC")
-        print("="*50)
-        
-        # Check old list
-        list_exists = await redis.exists("checkboxes")
-        if list_exists:
-            list_len = await redis.llen("checkboxes")
-            print(f"✓ Old list 'checkboxes' exists: {list_len:,} items")
-            
-            # Sample first 10 values
-            sample = await redis.lrange("checkboxes", 0, 9)
-            checked_in_sample = sum(1 for v in sample if json.loads(v))
-            print(f"  Sample (first 10): {checked_in_sample} checked")
-            
-            # Count all checked (slow but accurate)
-            print("  Counting all checked (this may take a moment)...")
-            all_values = await redis.lrange("checkboxes", 0, -1)
-            total_checked = sum(1 for v in all_values if json.loads(v))
-            print(f"  Total checked in list: {total_checked:,}")
-        else:
-            print("✗ Old list 'checkboxes' does not exist")
-        
-        # Check bitmap
-        bitmap_exists = await redis.exists("checkboxes_bitmap")
-        if bitmap_exists:
-            bitmap_count = await redis.bitcount("checkboxes_bitmap")
-            print(f"✓ Bitmap 'checkboxes_bitmap' exists")
-            print(f"  Checked in bitmap: {bitmap_count:,}")
-        else:
-            print("✗ Bitmap 'checkboxes_bitmap' does not exist")
-        
-        print("="*50 + "\n")
-    
-    # async def init_checkboxes():
-    #     """Initilize Redis list if needed, but DON'T load all into memory """
-    #     current_len = await redis.llen(checkboxes_key)
-    #     if current_len < N_CHECKBOXES:
-    #         #print(f"[CACHE] Initializing {N_CHECKBOXES:,} checkboxes...")
-    #         print(f"[INIT] Redis list too short ({current_len:,}), padding to {N_CHECKBOXES:,}...")
-    #         missing = N_CHECKBOXES - current_len
-    #         pipe = redis.pipeline()
-    #         batch_size = 10000
-    #         for i in range(0, missing, batch_size):
-    #             batch = [json.dumps(False)] * min(batch_size, missing -i)
-    #             pipe.rpush(checkboxes_key, *batch)
-    #         await pipe.execute()
-    #         print(f"[INIT] added {missing:,} missing checkboxes")
     
     async def init_bitmap():
         """Ensure bitmap exists (optional -Redis creare)"""
@@ -360,7 +253,7 @@ def web():
         print("Volume committed  -data persisted")
 
     style= open(css_path_remote, "r").read()
-    app, _ = fh.fast_app(
+    app, _= fh.fast_app(
         on_startup=[startup_migration],
         on_shutdown=[on_shutdown],
         hdrs=[fh.Style(style)],
@@ -532,20 +425,6 @@ def web():
                     hx_trigger="every 1s",hx_swap="outerHTML", hx_swap_oob="true"
                     )
     
-    async def cleanup_cache_task():
-        """periodically clean up old cache entries"""
-        while True:
-            await asyncio.sleep(300)
-
-            #keep only the most recently accessed entries
-            if len(checkbox_cache) > 50000: # keep max 50k in memory
-                print(f"[CACHE] Clean up,current size: {len(checkbox_cache):,}")
-                #Remove random half of entries
-                keys_to_remove = list(checkbox_cache.keys())[::2]
-                for key in keys_to_remove:
-                    del checkbox_cache[key]
-                print(f"[CACHE] Cleanup to: {len(checkbox_cache):,}")
-
     #clients polling for outstanding diffs
     @app.get("/diffs/{client_id}")
     async def diffs(request, client_id:str):
@@ -578,10 +457,11 @@ def web():
         return diff_array
     
     @app.get("/visitors")
-    async def visitors_page(request):
-        print("[VISITORS] Loading visitors page ...")
+    async def visitors_page(request, offset: int = 0, limit: int = 100):
+        print("[VISITORS] Loading visitors page (offset={offset}, limit={limit})..")
 
-        recent_ips = await redis.zrange("recent_visitors_sorted", 0, 99, desc=True)
+        #get visitors with pagination
+        recent_ips = await redis.zrange("recent_visitors_sorted", offset, offset + limit - 1, desc=True)
         print("[VISITORS] Found {len(recent_ips)} IPs in sorted set")
 
         visitors = []
@@ -590,81 +470,127 @@ def web():
             visitors_raw = await redis.get(f"visitor:{ip_str}")
             if visitors_raw:
                 v = json.loads(visitors_raw)
-                v["timestamp"] = float(v["timestamp"])
+                v["timestamp"] = float(v.get("timestamp", time.time()))
                 visitors.append(v)
 
         print(f"[VISITORS] Loaded {len(visitors)} visitor records")
 
+        #Get total count from sorted set
+        total_in_db = await redis.zcard("recent_visitors_sorted")
         total_visitors = await redis.get("total_visitors_count")
         total_count = int(total_visitors) if total_visitors else 0
-        print(f"[VISITORS] Total unique visitors: {total_count}")
+        print(f"[VISITORS] Total unique visitors: {total_count}, in DB: {total_visitors}")
 
-        hour_stats = {}
-        for v in visitors:
-            hour = time.strftime("%Y-%m-%d %H:00", time.localtime(v["timestamp"]))
-            hour_stats[hour] = hour_stats.get(hour, 0) + 1
+        #calculate if there are more visitors to load
+        has_more = (offset + limit) < total_in_db
+        next_offset = offset + limit if has_more else None
+        prev_offset = max(0, offset - limit) if offset > 0 else None
 
-        sorted_hours = sorted(hour_stats.items(), key=lambda x:x[0], reverse=True)
-
+        #Day status
         day_stats = {}
         for v in visitors:
-            day = time.strftime("%Y-%m-%d", time.localtime(v["timestamp"]))
+            day = time.strftime("%Y-%m-%d %H:00", time.localtime(v["timestamp"]))
             day_stats[day] = day_stats.get(day, 0) + 1
 
         sorted_days = sorted(day_stats.items(), key=lambda x:x[0], reverse=True)
 
-        rows = [
-            fh.Tr(
-                fh.Td(v["ip"]),
-                fh.Td(v["city"] or "-"),
-                fh.Td(v.get("zip", "-")),
-                fh.Td(v["country"] or "-"),
-                fh.Td(fh.Span(f"{v.get('visit_count', 1)}", cls="visit-badge")),
-                fh.Td(time.strftime("%b %d, %H:%M:%S", time.localtime(v["timestamp"]))),
-            )
-            for v in visitors
-        ]
+        #group visitors by day for the table
+        visitors_by_day = {}
+        for v in visitors:
+            day = time.strftime("%Y-%m-%d", time.localtime(v["timestamp"]))
+            if day not in visitors_by_day:
+                visitors_by_day[day] = []
+            visitors_by_day[day].append(v)
+            #day_stats[day] = day_stats.get(day, 0) + 1
 
-        max_count = max([count for _,count in sorted_hours], default=1) if sorted_hours else 1
-        chart_bars = []
+        sorted_day_keys = sorted(visitors_by_day.keys(), reverse=True)
 
-        for datetime_str, count in sorted_hours[:24]:
-            display_hour = time.strftime("%b %d, %H:00", time.strptime(datetime_str, "%Y-%m-%d %H:00"))
-            percentage = (count/ max_count) * 100
+        #Create table rows grouped by day
+        table_content = []
+        for day_key in sorted_day_keys:
+            day_visitors = visitors_by_day[day_key]
+            day_display = time.strftime("%A, %B %d, %Y", time.strptime(day_key, "%Y-%m-%d"))
+            visitor_count = len(day_visitors)
 
-            chart_bars.append(
-                fh.Div(
-                    fh.Div(
-                        fh.Span(display_hour, cls="countrt-label"),
-                        fh.Span(f"{count} visitor{'s' if count != 1 else ''}", cls="country-count"),
-                        cls="bar-labels"
-                    ),
-                    fh.Div(
-                        fh.Div(
-                            style=f"width: {percentage}%",
-                            cls="bar-fill"
-                        ),
-                        cls="bar-container"
-                ),
-                cls="chart-row"
-            )
-        )
+            table_content.append(
+                fh.Tr( fh.Td( fh.Div(
+                            fh.Strong(day_display),
+                            fh.Span(f" ({visitor_count} visitor{'s' if visitor_count != 1 else ''})",
+                                    style="color: #667eea; margin-left: 10px;"),
+                            style="padding: 10px 0;" ), colspan=7, cls="day-separator" )))
 
-        max_count = max([count for _,count in sorted_days], default=1) if sorted_days else 1
+            #add visitors rows for this day
+            for v in day_visitors:
+                is_vpn = v.get("is_vpn", False)
+                security_badge = fh.Span("VPN", cls="badge badge-vpn") if is_vpn else fh.Span("clean", cls="badge badge-clear")
+                table_content.append(
+                    fh.Tr(
+                        fh.Td(v["ip"]),
+                        fh.Td(security_badge),
+                        fh.Td(v["city"] or "-"),
+                        fh.Td(v.get("zip", "-")),
+                        fh.Td(v["country"] or "-"),
+                        fh.Td(fh.Span(f"{v.get('visit_count', 1)}", cls="visit-badge")),
+                        fh.Td(time.strftime("%H:%M:%S", time.localtime(v["timestamp"]))),
+                        cls="visitor-row" ))
+
+
+        #Day chart bars ( last 7 days)
+        max_count_days = max([count for _,count in sorted_days], default=1) if sorted_days else 1
         chart_bars_days = []
-        for date_str, count in sorted_days[:7]:
-            display_date = time.strftime("%a,%b %d", time.strptime(date_str, "%Y-%m-%d")),
-            percentage = (count/ max_count) * 100
+        now_ts = time.time()
+        max_count_days = 1
+        last_7_days = []
+        for i in range(6,-1,-1):
+            day_ts = now_ts - (i*86400)
+            day_key = time.strftime("%Y-%m-%d", time.localtime(day_ts))
 
+            count = sum(1 for v in visitors if time.strftime("%Y-%m-%d", time.localtime(v["timestamp"])) == day_key)
+            last_7_days.append((day_key, count))
+            max_count_days = max(max_count_days, count)
+
+        for date_str, count in last_7_days:
+            display_date = time.strftime("%a,%b %d", time.strptime(date_str, "%Y-%m-%d"))
+            percentage = (count/ max_count_days) * 100
             chart_bars_days.append(
                 fh.Div(
                     fh.Div(
-                        style=f"height: {percentage}%",
-                        cls="bar-fill-vertical"
-                    ),
-                    fh.Span(display_date, cls="bar-label-vertical"),
-                    cls="bar-vertical"
-                )    
+                        fh.Span(f"{count}", cls="bar-value") if count > 0 else "",
+                        style=f"height: {max(percentage,2)}%",  cls="bar-fill-vertical" 
+                        ),
+                    fh.Span(display_date, cls="bar-label-vertical"), cls="bar-vertical" 
+                )
+            )
+        
+        #pagination controls
+        pagination_controls = fh.Div(
+            fh.Div(
+                fh.A(
+                    "<- Previous",
+                    href=f"/visitors?offset={prev_offset}&limit={limit}", cls="pagination-btn"
+                ) if prev_offset is not None else fh.Span("<-Previous", cls="pagination-btn disabled"),
+
+                fh.Span(
+                    f"Showing {offset + 1}-{min(offset + limit, total_in_db)} of {total_in_db} visitors", cls="pagination-info"
+                ),
+                fh.A(
+                    "Next ->",
+                    href=f"/visitors?offset={next_offset}&limit={limit}", cls="pagination-btn"
+                ) if has_more else fh.Span("Next ->", cls="pagination-btn disabled"), cls="pagination-controls" ),
+                
+            fh.Div(
+                fh.Span("show: ", style="margin-right: 10px;"),
+                fh.A("50", href=f"/visitors?offset=0&limit=50",
+                    cls="limit-btn" + (" active" if limit == 50 else "")),
+                fh.A("100", href=f"/visitors?offset=0&limit=100",
+                    cls="limit-btn" + " active" if limit == 100 else ""),
+                fh.A("200", href=f"/visitors?offset=0&limit=200",
+                    cls="limit-btn" + (" active" if limit == 200 else "")), 
+                fh.A("500", href=f"/visitors?offset=0&limit=500",
+                    cls="limit-btn" + (" active" if limit == 500 else "")),
+                cls="limit-controls"
+            ), 
+            cls="pagination-wrapper", #style="margin-bottom: 30px;"
         )
 
         return fh.Main(
@@ -674,45 +600,40 @@ def web():
             fh.Div(
                 fh.Div("Total Unique Visitors", cls="stats-label"),
                 fh.Div(f"{total_count:,}", cls="stats-number"),
-                fh.Div("Last 100 Visitors Shown below", style="font-size: 0.9em; opacity: 0.8;"),
+                fh.Div(f"Database contains {total_in_db:,} Visitor Records",
+                        style="font-size: 0.9em; opacity: 0.8;"),
                 cls="stats-card"
             ),
+            pagination_controls,
 
             #vertical bar chart
             fh.Div(
                 fh.H2("Visitors by Day (Last 7 days)", cls="section-title"),
                 fh.Div(
-                    *chart_bars_days if chart_bars_days else [fh.P("No visitors data yet", style="text-align: center; color:#999;")],
+                    *chart_bars_days if chart_bars_days else [
+                        fh.P("No visitors data yet", style="text-align: center; color:#999;")],
                     cls="chart-bars-container"
                 ), 
                 cls="chart-container" 
             ),
 
+            #visitors table with day grouping
             fh.Div(
-                fh.H2("Visitors by Hour (Last 24 Hours)", cls="section-title"),
-                *chart_bars if chart_bars else [fh.P("No visitors data yet", style="text-align: center; color:#999;")],
-                cls="chart-container"),
-
-            #visitors table
-            fh.Div(
-                fh.H2("Recent visitors", cls="sectioin-title"),
+                fh.H2(f"Visitors Logs (Last {limit} Visitors)", cls="section-title"),
                 fh.Table(
-                    fh.Tr(
-                        fh.Th("IP"),
-                        fh.Th("City"),
-                        fh.Th("Zip"),
-                        fh.Th("Country"),
-                        fh.Th("Visits"),
-                        fh.Th("Last seen"),
+                    fh.Tr( fh.Th("IP"), fh.Th("Security"), fh.Th("City"), fh.Th("Zip"), fh.Th("Country"), fh.Th("Visits"), fh.Th("Last seen"),
                     ),
-                    *rows,
-                    cls="table"
-                )
+                    *table_content,
+                    cls="table visitors-table"
+                )if table_content else fh.P("No visitors to display", 
+                                            style="text-align: center; color:#999; padding: 20px;")
             ),
+            pagination_controls,
+
             fh.Div(
                 fh.A("<- Back to checkboxes", href="/", cls="back-link"),
-                style="text-align: center;"
-            ),
+                style="text-align: center; margin-top: 30px;"
+            ), 
             cls="visitors-container"
         )
         
