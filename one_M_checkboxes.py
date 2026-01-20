@@ -50,11 +50,22 @@ async def get_geo_from_providers(ip:str, redis):
     #primary provider
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            r = await client.get(f"https://ipwho.is/{ip}")
+            r = await client.get(f"https://ipwho.is/{ip}?security=1")
         if r.status_code == 200:
             data = r.json()
             if data.get("success"):
                 print(f"[GEO] ✅ ipwho.is succesfully resolved {ip} -> {data.get('city')}, {data.get('country')}")
+                sec = data.get("security", {})
+                conn = data.get("connection", {})
+                
+                #usage logic
+                usage = "Residential"
+                org_lower = conn.get("org", "").lower()
+                if sec.get("hosting"): usage = "Data Center"
+                elif any(x in org_lower for x in ["uni", "college", "school"]): usage = "Education"
+                elif any(x in org_lower for x in ["corp", "inc", "ltd"]):usage = "Business"
+                elif data.get("type") == "Mobile": usage = "Cellular"
+
                 #normalize the data to match entry format
                 return{
                     "ip": ip,
@@ -62,35 +73,45 @@ async def get_geo_from_providers(ip:str, redis):
                     "postal": data.get("postal"),
                     "country": data.get("country"),
                     "region": data.get("region"),
-                    "is_vpn": data.get("security", {}).get("vpn", False),
-                    "isp": data.get("connection", {}).get("isp"),
+                    "is_vpn": sec.get("vpn", False) or sec.get("proxy", False),
+                    "isp": conn.get("isp"),#data.get("connection", {}).get("isp"),
+                    "is_hosting": sec.get("hosting", False),#critical for bots
+                    "org": conn.get("org"),
+                    "asn": conn.get("asn"),
+                    "usage_type": usage,
+                    "is_relay": sec.get("relay", False) or "icloud private relay" in conn.get("isp", "").lower(),
+                    "provider": "ipwho.is"
                 }
     except Exception: pass
     #second provider
     try:
+        #fields=66842239 gets: hosting, mobile, proxy, isp, org, city, country, zip
         async with httpx.AsyncClient(timeout=3.0) as client:
-            r = await client.get(f"https://ipapi.co/{ip}/json/")
-        if r.status_code == 200:
-            data = r.json()
-            if "country_name" in data:
-                print(f"[GEO] ✅ ipapi.co succesfully resolved {ip} -> {data.get('city')}, {data.get('country_name')}")
-                await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
-                return data
-    except Exception: pass
-    #Fallback provider
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            r = await client.get(f"http://ip-api.com/json/{ip}")
+            r = await client.get(f"http://ip-api.com/json/{ip}?fields=66842239")
         if r.status_code == 200:
             data = r.json()
             if data.get("status") == "success":
-                print(f"[GEO] ✅ ip-api.com succesfully resolved {ip} -> {data.get('city')}, {data.get('country')}")
-                await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
-                return data
+                usage = "Residential"
+                if data.get("hosting"): usage = "Data Center"
+                elif data.get("mobile"): usage = "Cellular"
+                print(f"[GEO] ✅ ip-api.com succesfully resolved {ip}")# -> {data.get('city')}, {data.get('country')}")
+                return {
+                    "ip": ip,
+                    "city": data.get("city"),
+                    "isp": data.get("isp"),
+                    "usage_type": usage,
+                    "is_vpn": data.get("proxy", False),
+                    "is_hosting": data.get("hosting", False),
+                    "is_relay": "icloud private relay" in data.get("isp", "").lower(),
+                    "provider": "ip-api.com"
+                }
+                # await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
+                # return data
     except Exception as e: 
         print(f"[GEO] ❌ ip-api.com failed for  {ip}: {e}")
+
     #last resort 
-    return {"ip": ip, "city": None, "country": None, "zip": None}
+    return {"ip": ip, "usage_type": "Unknown", "city": None, "country": None, "zip": None}
 
 async def get_geo(ip: str, redis):
     """Return geo info from ip using cache + fallback providers"""
@@ -115,12 +136,32 @@ async def record_visitors(ip, user_agent, geo, redis):
         visitors_key = f"visitor:{ip}"
         existing = await redis.get(visitors_key)
         is_new_visitor = existing is None
+        #---bot detection
+        ua_lower = user_agent.lower()
+        is_hosting = geo.get("is_hosting", False)
+        is_relay = geo.get("is_relay", False)
+
+        #Known Good Bots (Search Engines)
+        good_bots = ["googlebot", "bingbot", "yandexbot", "baiduspider", "duckduckbot"]
+        is_good_bot = any(bot in ua_lower for bot in good_bots)
+        
+        #programming libraries/scrapers
+        scripts = ["python-requests", "aiohttp", "curl", "wget", "postman", "headless"]
+        is_script = any(s in ua_lower for s in scripts)
+
+        #final classsification
+        if is_good_bot: classification = "Good Bot (Search Engine)"
+        elif is_relay: classification = "Human (Privacy/Relay)"
+        elif is_hosting or is_script: classification = "Bot/Server"
+        else: classification = "Human"
 
         visit_count = (json.loads(existing).get("visit_count", 1) + 1) if existing else 1
         
         entry = {
             "ip": ip,
             "user_agent": user_agent[:120],
+            "classification": classification,
+            "usage_type": geo.get("usage_type", "Unknown"),
             "city": geo.get("city") or geo.get("region", "Unknown"),
             "zip": geo.get("postal") or geo.get("zip") or "-",
             "is_vpn": geo.get("is_vpn", False),
@@ -138,6 +179,9 @@ async def record_visitors(ip, user_agent, geo, redis):
             print(f"[VISITOR] New visitor from {geo.get('city', 'Unknown',)}, {geo.get('country', 'Unknown')}")
         else:
             print(f"[VISITOR] Returning visitor {ip}  (visit #{visit_count}")
+        
+        status_icon = "👤" if "Human" in classification else "🤖"
+        print(f"['VISITOR'] {status_icon} { ip} | {classification} | Type: {entry['usage_type']} | ISP: {entry['isp']}")
 
     except Exception as e:
         print(f"[ERROR] Failed to record visitor: {e}")
@@ -246,7 +290,7 @@ def web():
         #sort by index to maintain order
         cached_values.sort(key=lambda x:x[0])
         return [v for _, v in cached_values]
-    
+         
     async def get_status():
         """ Get checked/unchecked counts - use redis directly, not cache"""
         checked = await redis.bitcount(checkboxes_bitmap_key)
@@ -298,6 +342,62 @@ def web():
                 metrics_for_count["request_count"] = 0
                 metrics_for_count["last_throughput_log"] = now
         return response
+
+    @app.get("/fix-my-data")
+    async def fix_data():
+        print("[MIGRATION] Starting visitor data migration for legacy record...")
+        visitor_keys = await redis.keys("visitor:*")
+        print(f"[MIGRATION] Found {len(visitor_keys)} records to check.")
+        updated_count = 0
+
+        for key in visitor_keys:
+            raw_data = await redis.get(key)
+            if not raw_data: continue
+            record = json.loads(raw_data)
+
+            if "isp" not in record or record.get("isp") in ["-", "Unknown", "Unknown (Legacy)"]:
+            #if "classification" not in record:
+                ip = record.get("ip")
+                print(f"[MIGRATION] Fetching missing data for: {ip}")
+                try:
+                    async with httpx.AsyncClient(timeout=3.0) as client:
+                        r = await client.get(f"http://ip-api.com/json/{ip}?fields=66842239")
+                    if r.status_code == 200:
+                        geo = r.json()
+                        isp = geo.get("isp") or geo.get("org") or "Unknown"
+                        is_hosting = geo.get("is_hosting",False)
+                        
+                        #check redis cache first, then hit api
+                        #geo_data = await get_geo_from_providers(ip, redis)
+
+                        #re-run bot detection logic on old records
+                        ua_lower = record.get("user_agent", "").lower()
+                        #is_hosting = geo_data.get("is_hosting",False)
+                        #is_relay = geo_data.get("is_relay",False)
+
+                        if any(bot in ua_lower for bot in ["googlebot", "bingbot", "yandexbot", "baiduspider", "duckduckbot"]): classification = "Good Bot (Search Engine)"
+                        #elif is_relay: classification = "Human (Privacy/Relay)"
+                        elif is_hosting or any(s in ua_lower for s in ["python-requests", "aiohttp", "curl", "wget", "postman", "headless"]): classification = "Bot/Server"
+                        else: classification = "Human"
+
+                        #update record while preserving old data, only over write whats new
+                        updated_record = { **record, "isp": isp, "org": geo.get("org", isp),
+                                        "is_hosting": is_hosting, "classification": classification,
+                                        "usage_type": "Data Center" if is_hosting else "Residential"
+                                        }
+
+                        await redis.set(key, json.dumps(updated_record))
+                        updated_count +=1
+                        
+                        print(f"[MIGRATION]Success! updated {ip}: {isp}.")
+
+                        # Very important: Also update the GEO CACHE so future visits are fast
+                        await redis.set(f"geo:{ip}", json.dumps(updated_record))#,ex=86400 * 7)
+                except Exception as e:
+                    print(f"[MIGRATION] Error updating {ip}: {e}")
+                await asyncio.sleep(0.5)
+
+        return f"Success! {updated_count} records enriched."
     
     @app.get("/stats")
     async def stats():
@@ -557,13 +657,31 @@ def web():
             #add visitors rows for this day
             for v in day_visitors:
                 is_vpn = v.get("is_vpn", False)
-                security_badge = fh.Span("VPN/Proxy", cls="badge badge-vpn") if is_vpn else fh.Span("clean", cls="badge badge-clear")
+                is_relay = "Relay" in  v.get("classification", "")
+
+                if is_relay:
+                    security_badge = fh.Span("iCloud Relay", cls="badge badge-relay", style="background:#5856d6; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
+                elif is_vpn:
+                    security_badge = fh.Span("VPN/PROXY", cls="badge badge-vpn", style="background:#ff3b30; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
+                else:
+                    security_badge = fh.Span("Clean", cls="badge badge-relay", style="background:#4cd964; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
+                #security_badge = fh.Span("VPN/Proxy", cls="badge badge-clear") if is_vpn else fh.Span("clean", cls="badge badge-clear")
+                
+                #classification and usage label
+                usage = v.get("usage_type", "Residential")
+                classification = v.get("classification", "Human")
+                class_color = "#ff9500" if "Bot" in classification else "#007aff"
+                category_cell = fh.Div(
+                    fh.Div(classification, style=f"font-weight:bold; color:{class_color};"),
+                    fh.Div(usage, style = "font-size:0.8em opacity:0.7;"),
+                )
+
                 local_dt = utc_to_local(v["timestamp"])
                 local_time_str = local_dt.strftime("%H:%H:%S")
         
                 table_content.append(
-                    fh.Tr(  fh.Td(v["ip"]), fh.Td(security_badge),
-                            fh.Td(v["city"] or "-"), fh.Td(v.get("zip", "-")), fh.Td(v["country"] or "-"),
+                    fh.Tr(  fh.Td(v.get("ip")), fh.Td(security_badge), fh.Td(category_cell), fh.Td(v.get("isp") or "-", style="max-width:150px;overflow:hidden;text-overflow:ellipsis; white-space:nowrap; font-size:0.85em;"),
+                            fh.Td(v.get("city") or "-"), fh.Td(v.get("zip", "-")), fh.Td(v.get("country") or "-"), 
                             fh.Td(fh.Span(f"{v.get('visit_count', 1)}", cls="visit-badge")), fh.Td(local_time_str), cls="visitor-row" ))
         #Day chart bars ( last 7 days)
         max_count_days = max([count for _,count in sorted_days], default=1) if sorted_days else 1
@@ -634,11 +752,11 @@ def web():
                         cls="chart-bars-container" ), cls="chart-container" ),
                 #visitors table with day grouping
                 fh.Div(
-                    fh.H2(f"Visitors Logs (Last {limit} Visitors)", cls="section-title"),
+                    fh.H2(f"Visitors Dashboard (Last {limit} Visitors)", cls="section-title"),
                     fh.Div(fh.P("<- Scroll horizontal to see all columns ->",
                         style="text-align: center; color:#999; font-size: 0.85em; margin-bottom: 10px; display: none;",cls="mobile-control-hint"),
                     fh.Table(
-                        fh.Tr( fh.Th("IP"), fh.Th("Security"), fh.Th("City"), fh.Th("Zip"), fh.Th("Country"), fh.Th("Visits"), fh.Th("Last seen"), ),
+                        fh.Tr( fh.Th("IP"), fh.Th("Security"), fh.Th("Category"), fh.Th("ISP/Org"), fh.Th("City"), fh.Th("Zip"), fh.Th("Country"), fh.Th("Visits"), fh.Th("Last seen"), ),
                         *table_content, cls="table visitors-table"
                     )if table_content else fh.P("No visitors to display", style="text-align: center; color:#999; padding: 20px;"),
                     style="overflow-x: auto; -webkit-overflow-scrolling: touch;")),
