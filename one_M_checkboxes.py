@@ -135,6 +135,20 @@ async def get_geo(ip: str, redis):
         print(f"[GEO] ⚠️  Failed to cache geo data for {ip}: {e}")
     return data
 
+def get_device_info(ua_string:str):
+    ua = ua_string.lower()
+    if "mobi" in ua or "iphone" in ua: device = "Mobile"
+    elif "ipad" in ua or "tablet" in ua: device = "Tablet"
+    else: device = "Desktop"
+
+    #os detection
+    if "windows" in ua: os = "windows"
+    elif "macintosh" in ua or "mac os" in ua: os = "macOS"
+    elif "iphone" in ua or "ipad" in ua: os= "iOS"
+    elif "andriod" in ua: os ="Andriod"
+    elif "linux" in ua:os = "Linux"
+    else: os = "Unknown"
+    return f"{device} ({os})"
 
 async def record_visitors(ip, user_agent, geo, redis):
     """ Record visitor with visit count tracking"""
@@ -144,6 +158,7 @@ async def record_visitors(ip, user_agent, geo, redis):
         is_new_visitor = existing is None
         #---bot detection
         ua_lower = user_agent.lower()
+        device_str = get_device_info(user_agent)
         is_hosting = geo.get("is_hosting", False)
         is_relay = geo.get("is_relay", False)
 
@@ -165,9 +180,11 @@ async def record_visitors(ip, user_agent, geo, redis):
         
         entry = {
             "ip": ip,
+            "device" : device_str,
             "user_agent": user_agent[:120],
             "classification": classification,
             "usage_type": geo.get("usage_type", "Unknown"),
+            "isp": geo.get("isp") or "-",
             "city": geo.get("city") or geo.get("region", "Unknown"),
             "zip": geo.get("postal") or geo.get("zip") or "-",
             "is_vpn": geo.get("is_vpn", False),
@@ -360,6 +377,7 @@ def web():
             raw_data = await redis.get(key)
             if not raw_data: continue
             record = json.loads(raw_data)
+            record["device"] = get_device_info(record.get("user_agent", ""))
 
             if "isp" not in record or record.get("isp") in ["-", "Unknown", "Unknown (Legacy)"]:
             #if "classification" not in record:
@@ -688,7 +706,7 @@ def web():
                 local_time_str = local_dt.strftime("%H:%H:%S")
         
                 table_content.append(
-                    fh.Tr(  fh.Td(v.get("ip")), fh.Td(security_badge), fh.Td(category_cell), fh.Td(v.get("isp") or "-", style="max-width:150px;overflow:hidden;text-overflow:ellipsis; white-space:nowrap; font-size:0.85em;"),
+                    fh.Tr(  fh.Td(v.get("ip")), fh.Td(v.get("device", "Unknown ?")), fh.Td(security_badge), fh.Td(category_cell), fh.Td(v.get("isp") or "-", style="max-width:150px;overflow:hidden;text-overflow:ellipsis; white-space:nowrap; font-size:0.85em;"),
                             fh.Td(v.get("city") or "-"), fh.Td(v.get("zip", "-")), fh.Td(v.get("country") or "-"), 
                             fh.Td(fh.Span(f"{v.get('visit_count', 1)}", cls="visit-badge")), fh.Td(local_time_str), cls="visitor-row" ))
         #Day chart bars ( last 7 days)
@@ -764,7 +782,7 @@ def web():
                     fh.Div(fh.P("<- Scroll horizontal to see all columns ->",
                         style="text-align: center; color:#999; font-size: 0.85em; margin-bottom: 10px; display: none;",cls="mobile-control-hint"),
                     fh.Table(
-                        fh.Tr( fh.Th("IP"), fh.Th("Security"), fh.Th("Category"), fh.Th("ISP/Org"), fh.Th("City"), fh.Th("Zip"), fh.Th("Country"), fh.Th("Visits"), fh.Th("Last seen"), ),
+                        fh.Tr( fh.Th("IP"), fh.Th("device"), fh.Th("Security"), fh.Th("Category"), fh.Th("ISP/Org"), fh.Th("City"), fh.Th("Zip"), fh.Th("Country"), fh.Th("Visits"), fh.Th("Last seen"), ),
                         *table_content, cls="table visitors-table"
                     )if table_content else fh.P("No visitors to display", style="text-align: center; color:#999; padding: 20px;"),
                     style="overflow-x: auto; -webkit-overflow-scrolling: touch;")),
