@@ -66,6 +66,8 @@ async def get_geo_from_providers(ip:str, redis):
                 elif any(x in org_lower for x in ["corp", "inc", "ltd"]):usage = "Business"
                 elif data.get("type") == "Mobile": usage = "Cellular"
 
+                is_relay_val = sec.get("relay", False) or "icloud" in conn.get("isp", "").lower() or "apple" in conn.get("org", "").lower()
+
                 #normalize the data to match entry format
                 return{
                     "ip": ip,
@@ -79,7 +81,7 @@ async def get_geo_from_providers(ip:str, redis):
                     "org": conn.get("org"),
                     "asn": conn.get("asn"),
                     "usage_type": usage,
-                    "is_relay": sec.get("relay", False) or "icloud private relay" in conn.get("isp", "").lower(),
+                    "is_relay": is_relay_val,#sec.get("relay", False) or "icloud private relay" in conn.get("isp", "").lower(),
                     "provider": "ipwho.is"
                 }
     except Exception: pass
@@ -94,15 +96,19 @@ async def get_geo_from_providers(ip:str, redis):
                 usage = "Residential"
                 if data.get("hosting"): usage = "Data Center"
                 elif data.get("mobile"): usage = "Cellular"
+                isp_lower = data.get("isp", "").lower()
+                org_lower = data.get("org", "").lower()
+                is_relay_val = data.get("proxy", False) or any(x in isp_lower or x in org_lower for x in ["icloud", "apple relay", "apple inc"])
                 print(f"[GEO] ✅ ip-api.com succesfully resolved {ip}")# -> {data.get('city')}, {data.get('country')}")
+                
                 return {
                     "ip": ip,
                     "city": data.get("city"),
                     "isp": data.get("isp"),
-                    "usage_type": usage,
+                    "usage_type": "Privacy Relay" if is_relay_val else usage,
                     "is_vpn": data.get("proxy", False),
                     "is_hosting": data.get("hosting", False),
-                    "is_relay": "icloud private relay" in data.get("isp", "").lower(),
+                    "is_relay": is_relay_val,#"icloud private relay" in data.get("isp", "").lower(),
                     "provider": "ip-api.com"
                 }
                 # await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
@@ -372,11 +378,13 @@ def web():
 
                         #re-run bot detection logic on old records
                         ua_lower = record.get("user_agent", "").lower()
+                        is_cloud = "icloud" in isp or "apple relay" in isp
                         #is_hosting = geo_data.get("is_hosting",False)
                         #is_relay = geo_data.get("is_relay",False)
 
                         if any(bot in ua_lower for bot in ["googlebot", "bingbot", "yandexbot", "baiduspider", "duckduckbot"]): classification = "Good Bot (Search Engine)"
                         #elif is_relay: classification = "Human (Privacy/Relay)"
+                        elif is_cloud: classification = "Human (Privacy/Relay)"
                         elif is_hosting or any(s in ua_lower for s in ["python-requests", "aiohttp", "curl", "wget", "postman", "headless"]): classification = "Bot/Server"
                         else: classification = "Human"
 
@@ -652,7 +660,7 @@ def web():
                             fh.Strong(day_display),
                             fh.Span(f" ({visitor_count} visitor{'s' if visitor_count != 1 else ''})",
                                     style="color: #667eea; margin-left: 10px;"),
-                            style="padding: 10px 0;" ), colspan=7, cls="day-separator" )))
+                            style="padding: 10px 0;" ), colspan=9, cls="day-separator" )))
 
             #add visitors rows for this day
             for v in day_visitors:
