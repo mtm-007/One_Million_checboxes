@@ -17,7 +17,6 @@ from redis.asyncio import Redis
 import sqlite3
 import aiosqlite
 
-
 N_CHECKBOXES=1000000
 VIEW_SIZE= 5000
 LOAD_MORE_SIZE= 2000
@@ -115,7 +114,6 @@ async def get_visitor_count_sqlite():
         
 #New geolocation helper function
 async def get_geo_from_providers(ip:str, redis):
-    #primary provider
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             r = await client.get(f"https://ipwho.is/{ip}?security=1")
@@ -126,7 +124,6 @@ async def get_geo_from_providers(ip:str, redis):
                 sec = data.get("security", {})
                 conn = data.get("connection", {})
                 
-                #usage logic
                 usage = "Residential"
                 org_lower = conn.get("org", "").lower()
                 if sec.get("hosting"): usage = "Data Center"
@@ -283,7 +280,6 @@ app_image = (
 @modal.asgi_app()
 def web():
     # Start redis server locally inside the container (persisted to volume)
-    
     redis_process = subprocess.Popen(
         [   "redis-server", "--protected-mode", "no", "--bind","127.0.0.1", 
             "--port", "6379", "--dir", "/data", #store data in persistent volume
@@ -291,7 +287,6 @@ def web():
             "--save", "" ] #disable all other automatic saves
         , stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
-
     time.sleep(1)
 
     redis = Redis.from_url("redis://127.0.0.1:6379")
@@ -317,19 +312,15 @@ def web():
         #check if we have them in cache
         cached_values = []
         missing_indices = []
-        #global checkbox_cache, checkbox_cache_loaded_at
-
+        
         for i in range(start_idx, end_idx):
-            if i in checkbox_cache:
-                cached_values.append((i, checkbox_cache[i]))
-            else:
-                missing_indices.append(i)
+            if i in checkbox_cache: cached_values.append((i, checkbox_cache[i]))
+            else: missing_indices.append(i)
         
         if missing_indices:
             #use pipeline for batch loading
             pipe = redis.pipeline()
-            for idx in missing_indices:
-                pipe.getbit(checkboxes_bitmap_key, idx)
+            for idx in missing_indices: pipe.getbit(checkboxes_bitmap_key, idx)
             
             results = await pipe.execute()
 
@@ -379,7 +370,6 @@ def web():
         start = time.time()
         response = await call_next(request)
         duration = (time.time() - start) * 1000 #ms
-        #----log latency
         print(f"[Latency] {request.url.path} -> {duration:.2f} ms")
 
         #update throughput counter
@@ -387,8 +377,7 @@ def web():
             metrics_for_count["request_count"] +=1
             now = time.time()
 
-            #log throughput every 5 seconds
-            if now - metrics_for_count["last_throughput_log"] >=5:
+            if now - metrics_for_count["last_throughput_log"] >=5: #log throughput every 5 seconds
                 rsp = metrics_for_count["request_count"] / (now - metrics_for_count["last_throughput_log"])
                 print(f"[THROUGHPUT] {rsp:.2f} req/sec over last 5s")
                 metrics_for_count["request_count"] = 0
@@ -409,8 +398,7 @@ def web():
         redis_count = int(redis_count) if redis_count else 0
 
         return fh.Div(
-            fh.Div("Backup Status"),
-            fh.P(f"SQLite (Persistent): {sqlite_count:,} visitors"),
+            fh.Div("Backup Status"), fh.P(f"SQLite (Persistent): {sqlite_count:,} visitors"),
             fh.P(f"Redis (Active): {redis_count:,} visitors"),
             fh.P(f"Status: {'In Sync' if sqlite_count == redis_count else 'Out of Sync'}"),
             fh.A("Restore from SQLite", href="/restore-from-sqlite",
@@ -431,17 +419,14 @@ def web():
             record["device"] = get_device_info(record.get("user_agent", ""))
 
             if "isp" not in record or record.get("isp") in ["-", "Unknown", "Unknown (Legacy)"]:
-            #if "classification" not in record:
                 ip = record.get("ip")
                 print(f"[MIGRATION] Fetching missing data for: {ip}")
-                #calls existing smart logic function
+               
                 geo_data = await get_geo(ip, redis)
 
                 #update record while preserving old data, only over write whats new
-                record.update({ "isp": geo_data.get("isp") or "-",
-                                "usage_type": geo_data.geet("usage_type", "Unknown"),
-                                "classification": record.get("classification") or "Human",
-                                "city": record.get("city") or geo_data.get("city"),
+                record.update({ "isp": geo_data.get("isp") or "-", "usage_type": geo_data.geet("usage_type", "Unknown"),
+                                "classification": record.get("classification") or "Human", "city": record.get("city") or geo_data.get("city"),
                                 "country": record.get("country") or geo_data.get("country") })
 
                 print(f"[MIGRATION]Filled missong ISP for: {ip}")
@@ -574,27 +559,18 @@ def web():
 
             expired = []
             for client in clients.values():
-                if client.id == client_id:
-                    continue
-
-                #clean up old clients
-                if not client.is_active():
-                    expired.append(client.id)
-                
+                if client.id == client_id: continue
+                if not client.is_active(): expired.append(client.id) #clean up old clients
                 client.add_diff(i)#add diff to client fpr when they next poll
 
-            for client_id in expired:
-                del clients[client_id]
+            for client_id in expired: del clients[client_id]
 
         checked, unchecked = await get_status()
 
-        return fh.Div(  fh.Span(f"{checked:,}", cls="status-checked"), " checked • ",
-                        fh.Span(f"{unchecked:,}",cls="status-unchecked"), " unchecked", 
-                        cls="stats", id="stats", hx_get="/stats",
-                        hx_trigger="every 1s",hx_swap="outerHTML", hx_swap_oob="true" )
+        return fh.Div(  fh.Span(f"{checked:,}", cls="status-checked"), " checked • ", fh.Span(f"{unchecked:,}", cls="status-unchecked"),
+                        " unchecked", cls="stats", id="stats", hx_get="/stats", hx_trigger="every 1s",hx_swap="outerHTML", hx_swap_oob="true" )
     
-    #clients polling for outstanding diffs
-    @app.get("/diffs/{client_id}")
+    @app.get("/diffs/{client_id}") #clients polling for outstanding diffs
     async def diffs(request, client_id:str):
         async with clients_mutex:
             client = clients.get(client_id, None)
@@ -604,7 +580,6 @@ def web():
             client.heartbeat()
             diffs_list = client.pull_diffs()
         
-        #await init_checkboxes()
         diff_array = []
         for i in diffs_list:
             #get fresh value from bitmap
@@ -612,14 +587,12 @@ def web():
             is_checked = bool(bit)
 
             diff_array.append(
-                fh.Input(   type="checkbox", id=f"cb-{i}", checked = is_checked, hx_post=f"/toggle/{i}/{client_id}",
-                            hx_swap="none", hx_swap_oob="true", cls= "cb" ))
+                fh.Input(   type="checkbox", id=f"cb-{i}", checked = is_checked, hx_post=f"/toggle/{i}/{client_id}", hx_swap="none", hx_swap_oob="true", cls= "cb" ))
         return diff_array
     
     @app.get("/visitors")
     async def visitors_page(request, offset: int = 0, limit: int = 5):#100):
         print(f"[VISITORS] Loading visitors page (offset={offset}, limit={limit})..")
-        #get visitors with pagination
         recent_ips = await redis.zrange("recent_visitors_sorted", offset, offset + limit - 1, desc=True)
         print(f"[VISITORS] Found {len(recent_ips)} IPs in sorted set")
 
@@ -673,22 +646,17 @@ def web():
 
             table_content.append(
                 fh.Tr( fh.Td( fh.Div(
-                            fh.Strong(day_display),
-                            fh.Span(f" ({visitor_count} visitor{'s' if visitor_count != 1 else ''})",
-                                    style="color: #667eea; margin-left: 10px;"),
-                            style="padding: 10px 0;" ), colspan=9, cls="day-separator" )))
+                            fh.Strong(day_display), fh.Span(f" ({visitor_count} visitor{'s' if visitor_count != 1 else ''})",
+                            style="color: #667eea; margin-left: 10px;"), style="padding: 10px 0;" ), colspan=9, cls="day-separator" )))
 
             #add visitors rows for this day
             for v in day_visitors:
                 is_vpn = v.get("is_vpn", False)
                 is_relay = "Relay" in  v.get("classification", "")
 
-                if is_relay:
-                    security_badge = fh.Span("iCloud Relay", cls="badge badge-relay", style="background:#5856d6; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
-                elif is_vpn:
-                    security_badge = fh.Span("VPN/PROXY", cls="badge badge-vpn", style="background:#ff3b30; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
-                else:
-                    security_badge = fh.Span("Clean", cls="badge badge-relay", style="background:#4cd964; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
+                if is_relay: security_badge = fh.Span("iCloud Relay", cls="badge badge-relay", style="background:#5856d6; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
+                elif is_vpn: security_badge = fh.Span("VPN/PROXY", cls="badge badge-vpn", style="background:#ff3b30; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
+                else: security_badge = fh.Span("Clean", cls="badge badge-relay", style="background:#4cd964; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
 
                 #classification and usage label
                 usage = v.get("usage_type", "Residential")
@@ -734,17 +702,14 @@ def web():
             chart_bars_days.append(
                 fh.Div(
                     fh.Div(
-                        fh.Span(f"{count}", cls="bar-value") if count > 0 else "",
-                        style=f"height: {max(percentage,2)}%",  cls="bar-fill-vertical" ),
-                    fh.Span(display_date, cls="bar-label-vertical"), cls="bar-vertical" 
-                ) )
+                        fh.Span(f"{count}", cls="bar-value") if count > 0 else "", style=f"height: {max(percentage,2)}%",  cls="bar-fill-vertical" ),
+                    fh.Span(display_date, cls="bar-label-vertical"), cls="bar-vertical" ) )
         
         pagination_controls = fh.Div(
             fh.Div(
                 fh.A("<- Previous", href=f"/visitors?offset={prev_offset}&limit={limit}", cls="pagination-btn"
                 ) if prev_offset is not None else fh.Span("<- Previous", cls="pagination-btn disabled"),
-                fh.Span(
-                    f"Showing {offset + 1}-{min(offset + limit, total_in_db)} of {total_in_db} visitors", cls="pagination-info"),
+                fh.Span(  f"Showing {offset + 1}-{min(offset + limit, total_in_db)} of {total_in_db} visitors", cls="pagination-info"),
                 fh.A("Next ->", href=f"/visitors?offset={next_offset}&limit={limit}", cls="pagination-btn"
                 ) if has_more else fh.Span("Next ->", cls="pagination-btn disabled"), cls="pagination-controls" ),
                 
@@ -760,7 +725,6 @@ def web():
             #add mobile-friendly meta tags
             fh.Meta(name="viewport", content="width=device-width, initial-scale=1.0, maximum-scale=5.0")),
             fh.Main( fh.H1("Recent Visitors Dashboard", cls="dashboard-title"),
-                #Total visitors card
                 fh.Div(
                     fh.Div("Total Unique Visitors", cls="stats-label"), fh.Div(f"{total_count:,}", cls="stats-number"),
                     fh.Div(f"Database contains {total_in_db:,} Visitor Records",
@@ -784,10 +748,7 @@ def web():
                     )if table_content else fh.P("No visitors to display", style="text-align: center; color:#999; padding: 20px;"),
                     style="overflow-x: auto; -webkit-overflow-scrolling: touch;")),
                 pagination_controls,
-                fh.Div(
-                    fh.A("<- Back to checkboxes", href="/", cls="back-link"),
-                    style="text-align: center; margin-top: 30px;"
-                ), cls="visitors-container" ))
+                fh.Div(  fh.A("<- Back to checkboxes", href="/", cls="back-link"), style="text-align: center; margin-top: 30px;" ), cls="visitors-container" ))
     return app
 
 class Client:
@@ -798,15 +759,12 @@ class Client:
         self.geo = None
         self.geo_ts = 0.0
     
-    def is_active(self):
-        return time.time() < self.inactive_deadline
+    def is_active(self): return time.time() < self.inactive_deadline
     
-    def heartbeat(self):
-        self.inactive_deadline = time.time() + 30
+    def heartbeat(self): self.inactive_deadline = time.time() + 30
 
     def add_diff(self, i):
-        if i not in self.diffs:
-            self.diffs.append(i)
+        if i not in self.diffs: self.diffs.append(i)
 
     def pull_diffs(self):
         #return a copy of the diffs and clear them
