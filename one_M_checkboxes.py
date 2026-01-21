@@ -1,9 +1,7 @@
 import time
 from asyncio import Lock
 from pathlib import Path
-#from turtle import width
 from uuid import uuid4
-
 from fasthtml.core import viewport
 from fasthtml.js import NotStr
 import modal
@@ -248,24 +246,12 @@ async def record_visitors(ip, user_agent, geo, redis):
 
         visit_count = (json.loads(existing).get("visit_count", 1) + 1) if existing else 1
         
-        entry = {
-            "ip": ip,
-            "device" : device_str,
-            "user_agent": user_agent[:120],
-            "classification": classification,
-            "usage_type": geo.get("usage_type", "Unknown"),
-            "isp": geo.get("isp") or "-",
-            "city": geo.get("city") or geo.get("region", "Unknown"),
-            "zip": geo.get("postal") or geo.get("zip") or "-",
-            "is_vpn": geo.get("is_vpn", False),
-            "country": geo.get("country") or geo.get("country_name"),
-            "timestamp": time.time(),
-            "visit_count" : visit_count,
-        }
+        entry = {   "ip": ip, "device" : device_str, "user_agent": user_agent[:120], "classification": classification, "usage_type": geo.get("usage_type", "Unknown"),
+                    "isp": geo.get("isp") or "-", "city": geo.get("city") or geo.get("region", "Unknown"), "zip": geo.get("postal") or geo.get("zip") or "-",
+                    "is_vpn": geo.get("is_vpn", False), "country": geo.get("country") or geo.get("country_name"), "timestamp": time.time(), "visit_count" : visit_count, }
 
         await redis.set(visitors_key, json.dumps(entry)) #save permanently
         await redis.zadd("recent_visitors_sorted", {ip:time.time()}) #maintain a sorted set by timestamp
-        #await redis.zremrangebyrank("recent_visitors_sorted", 0,-101) #keep only last 100
         await save_visitor_to_sqlite(entry)
 
         if is_new_visitor:
@@ -311,29 +297,19 @@ app_image = (
     .apt_install("redis-server").add_local_file(css_path_local,remote_path=css_path_remote)
     )
 
-@app.function( 
-        image = app_image, 
-        max_containers=1,
-        volumes={"/data": volume},
-        #keep_warm=1,
-        timeout=3600,)
-
+@app.function( image = app_image, max_containers=1, volumes={"/data": volume}, timeout=3600,) #keep_warm=1,
 @modal.concurrent(max_inputs=1000)
 @modal.asgi_app()
 def web():
     # Start redis server locally inside the container (persisted to volume)
     
     redis_process = subprocess.Popen(
-        [   "redis-server", 
-            "--protected-mode", "no",
-            "--bind","127.0.0.1", 
-            "--port", "6379", 
-            "--dir", "/data", #store data in persistent volume
+        [   "redis-server", "--protected-mode", "no", "--bind","127.0.0.1", 
+            "--port", "6379", "--dir", "/data", #store data in persistent volume
             "--save", "60", "1", #save every minute, if 1 change
             "--save", "" ] #disable all other automatic saves
         ,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
 
     time.sleep(1)
@@ -499,11 +475,8 @@ def web():
     async def stats():
         checked, unchecked = await get_status()
         print(f"[STATS] Checked: {checked:,}, Unchecked: {unchecked:,}")
-        return fh.Div(
-            fh.Span(f"{checked:,}", cls="status-checked"),
-            " checked • ",
-            fh.Span(f"{unchecked:,}",cls="status-unchecked"),
-            " unchecked", cls="stats", id="stats", hx_get="every 2s", hx_swap="outerHTML")
+        return fh.Div(  fh.Span(f"{checked:,}", cls="status-checked"), " checked • ",
+                        fh.Span(f"{unchecked:,}",cls="status-unchecked"), " unchecked", cls="stats", id="stats", hx_get="every 2s", hx_swap="outerHTML")
     
     @app.get("/chunk/{client_id}/{offset}")
     async def chunk(client_id:str, offset:int):
@@ -554,10 +527,7 @@ def web():
         async with  clients_mutex:
             clients[client.id] = client
 
-        #Load checkboxes immediately
-        #await init_checkboxes()
         checked, unchecked = await get_status()
-
         geo = await get_geo(client_ip, redis)
         await record_visitors(client_ip,user_agent, geo, redis)
 
@@ -640,12 +610,10 @@ def web():
 
         checked, unchecked = await get_status()
 
-        return fh.Div( 
-                    fh.Span(f"{checked:,}", cls="status-checked"), " checked • ",
-                    fh.Span(f"{unchecked:,}",cls="status-unchecked"), " unchecked", 
-                    cls="stats", id="stats", hx_get="/stats",
-                    hx_trigger="every 1s",hx_swap="outerHTML", hx_swap_oob="true"
-                    )
+        return fh.Div(  fh.Span(f"{checked:,}", cls="status-checked"), " checked • ",
+                        fh.Span(f"{unchecked:,}",cls="status-unchecked"), " unchecked", 
+                        cls="stats", id="stats", hx_get="/stats",
+                        hx_trigger="every 1s",hx_swap="outerHTML", hx_swap_oob="true" )
     
     #clients polling for outstanding diffs
     @app.get("/diffs/{client_id}")
@@ -666,15 +634,12 @@ def web():
             is_checked = bool(bit)
 
             diff_array.append(
-                fh.Input(   type="checkbox",
-                            id=f"cb-{i}",
-                            #checked= checkbox_cache[i], deprecated for list
+                fh.Input(   type="checkbox", id=f"cb-{i}",
                             checked = is_checked, #uses bitmap
                             hx_post=f"/toggle/{i}/{client_id}", hx_swap="none",
                             hx_swap_oob="true",# allows us to later push diffs to arbitrary checkboxes by id
                             cls= "cb"
                             )
-            #for i in diffs_list
         )
         return diff_array
     
@@ -751,8 +716,7 @@ def web():
                     security_badge = fh.Span("VPN/PROXY", cls="badge badge-vpn", style="background:#ff3b30; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
                 else:
                     security_badge = fh.Span("Clean", cls="badge badge-relay", style="background:#4cd964; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
-                #security_badge = fh.Span("VPN/Proxy", cls="badge badge-clear") if is_vpn else fh.Span("clean", cls="badge badge-clear")
-                
+
                 #classification and usage label
                 usage = v.get("usage_type", "Residential")
                 classification = v.get("classification", "Human")
