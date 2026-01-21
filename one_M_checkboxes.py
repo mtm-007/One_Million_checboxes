@@ -16,6 +16,8 @@ import subprocess
 import pytz
 from datetime import datetime, timezone
 from redis.asyncio import Redis
+import sqlite3
+import aiosqlite
 
 
 N_CHECKBOXES=1000000
@@ -40,11 +42,79 @@ GEO_TTL_REDIS = 86400
 CLIENT_GEO_TTL = 300.0  #client level in memory small cache (5min)
 LOCAL_TIMEZONE = pytz.timezone("America/Chicago")
 
+SQLITE_DB_PATH = "/data/visitors.db"
+
 def utc_to_local(timestamp):
     utc_dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
     local_dt = utc_dt.astimezone(LOCAL_TIMEZONE)
     return local_dt
 
+async def init_sqlite_db():
+    """Initialize SQLite database with visitors table """
+    async with aiosqlite.connect(SQLITE_DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS visitors (
+                ip TEXT PRIMARY KEY, device TEXT, user_agent TEXT, classification TEXT, usage_type TEXT, isp TEXT, city TEXT
+                zip TEXT, is_vpn INTEGER, country TEXT, timestamp REAL , visit_count INTEGER, last_updated REAL )""")
+        
+        await db.execute(""" 
+            CREATE INDEX IF NOT EXISTS idx_timestamp
+            ON visitors(timestamp DESC)""")
+        await db.commit()
+        print("[SQLite] Database initialized succesfully")
+
+async def save_visitor_to_sqlite(entry):
+    """ Save or update visitor record in SQLite"""
+    try:
+        async with aiosqlite.connect(SQLITE_DB_PATH) as db:
+            await db.execute(""" 
+                INSERT OR REPLACE INTO visitors
+                (ip, device, user_agent, classification, usage_type, isp, city, zip, is_vpn,  country, timestamp, visit_count, last_updated)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, ( entry["ip"], entry["device"], entry["user_agent"], entry["classification"], entry["usage_type"], entry["isp"], entry["city"], entry["zip"], 
+                        1 if entry["is_vpn"] else 0, entry["country"], entry["timestamp"], entry["visit_count"], time.time() ))
+            await db.commit()
+            print(f"[SQLite] Saved visitor {entry['ip']}")
+    except Exception as e:
+        print(f"[SQLite ERROR] Failed to save visitor: {e}")
+
+async def restore_visitors_from_sqlite(redis):
+    """ Restore all visitor records from  SQLite to Redis"""
+    try:
+        async with aiosqlite.connect(SQLITE_DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM visitors ORDER BY timestamp DESC") as cursor:
+                count = 0
+            async for row in cursor:
+                entry = {   "ip": row["ip"], "device": row["device"], "user_agent": row["usage_type"], "isp": row["isp"], "city": row["city"],
+                             "zip": row["zip"], "is_vpn": bool(row["is_vpn"]), "country": row["country"], "timestamp":row["timestamp"], "visit_count": row["visit_count"] }
+                await redis.set(f"visitor: {entry["ip"]}", json.dumps(entry))
+                await redis.zadd("recent_visitors_sorted", {entry["ip"]: entry["timestamp"]})
+                count += 1
+            #Restore to Redis
+            await redis.set(f"visitor: {entry['ip']}", json.dumps(entry))
+            await redis.zadd("recent_visitors_sorted", {entry['ip']: entry['timestamp']})
+            count += 1
+        #update total count
+        await redis.set("total_visitors_count", count)
+        print(f"[SQLite] Restore {count} visitors tot Redis")
+        return count
+
+    except Exception as e:
+        print(f"[SQLite ERROR] Failed to restore visitors: {e}")
+        return 0
+
+async def get_visitor_count_sqlite():
+    """ Get total visitor count from SQLite """
+    try:
+        async with aiosqlite.connect(SQLITE_DB_PATH) as db:
+            async with db.execute("SELECT COUNT(*) FROM visitors") as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+    except Exception  as e:
+        print(f"[SQLite ERROR] Failed to get count: {e}")
+        return 0
+        
 #New geolocation helper function
 async def get_geo_from_providers(ip:str, redis):
     #primary provider
@@ -196,6 +266,7 @@ async def record_visitors(ip, user_agent, geo, redis):
         await redis.set(visitors_key, json.dumps(entry)) #save permanently
         await redis.zadd("recent_visitors_sorted", {ip:time.time()}) #maintain a sorted set by timestamp
         #await redis.zremrangebyrank("recent_visitors_sorted", 0,-101) #keep only last 100
+        await save_visitor_to_sqlite(entry)
 
         if is_new_visitor:
             await redis.incr("total_visitors_count")
@@ -236,7 +307,7 @@ def get_real_ip(request):
 
 app_image = (
     modal.Image.debian_slim(python_version="3.12")
-    .pip_install("python-fasthtml==0.12.36", "httpx==0.27.0" ,"redis>=5.3.0", "pytz")
+    .pip_install("python-fasthtml==0.12.36", "httpx==0.27.0" ,"redis>=5.3.0", "pytz", "aiosqlite")
     .apt_install("redis-server").add_local_file(css_path_local,remote_path=css_path_remote)
     )
 
@@ -271,18 +342,20 @@ def web():
     print("Redis server started succesfully with persistent storage")
 
     async def startup_migration():
-        """Run migration on startup"""
-        #await migrate_litst_to_bitmap()
-        #await diagnose_redis_state()
+        """Run migration on startup - initialize SQLite """
+        await init_sqlite_db()
+
+        redis_count = await redis.get("total_visitors_count")
+        if not redis_count or int(redis_count) == 0:
+            sqlite_count = await get_visitor_count_sqlite()
+            if sqlite_count > 0:
+                print(f"[STARTUP] Redis empty, restoring {sqlite_count} visitors from SQLite...")
+                await restore_visitors_from_sqlite(redis)
+
         await redis.setbit(checkboxes_bitmap_key, N_CHECKBOXES - 1, 0)
         print("[STARTUP] Bitmap initialized/verified")
         print("[STARTUP] Migration check complete")
-
     
-    async def init_bitmap():
-        """Ensure bitmap exists (optional -Redis creare)"""
-        #await redis.setbit(checkboxes_bitmap_key, N_CHECKBOXES - 1, 0)
-
     async def get_checkbox_range_cached(start_idx: int, end_idx:int):
         """ Load a specific range of chekcboxes, with caching"""
         #check if we have them in cache
@@ -365,7 +438,30 @@ def web():
                 metrics_for_count["request_count"] = 0
                 metrics_for_count["last_throughput_log"] = now
         return response
+    
+    @app.get("/restore-from-sqlite")
+    async def restore_endpoint():
+        """ Manual endpoint to restore Redis from SQLite backup"""
+        count = await restore_visitors_from_sqlite(redis)
+        return f"Returned {count} visitors from SQLite to Redis"
+    
+    @app.get("/backup-stats")
+    async def backup_stats():
+        """ Show backup statistics"""
+        sqlite_count = await get_visitor_count_sqlite()
+        redis_count = await redis.get("total_visistors_count")
+        redis_count = int(redis_count) if redis_count else 0
 
+        return fh.Div(
+            fh.Div("Backup Status"),
+            fh.P(f"SQLite (Persistent): {sqlite_count:,} visitors"),
+            fh.P(f"Redis (Active): {redis_count:,} visitors"),
+            fh.P(f"Status: {'In Sync' if sqlite_count == redis_count else 'Out of Sync'}"),
+            fh.A("Restore from SQLite", href="/restore-from-sqlite",
+                 style="display:block;margin-top:20px;padding:10px;background:#667eea;color:white;text-align:center;border-radius:5px;text-decoration:none;"),
+            style="padding:20px;max-width:600px;margin:50px auto;background:#f7f7f7;border-radius:10px;"
+        )
+        
     @app.get("/fix-my-data")
     async def fix_data():
         print("[MIGRATION] Starting visitor data migration for legacy record...")
@@ -395,6 +491,7 @@ def web():
                 print(f"[MIGRATION]Filled missong ISP for: {ip}")
 
             await redis.set(key, json.dumps(record))
+            await save_visitor_to_sqlite(record)
             updated_count += 1
         return f"Success! {updated_count} records updated."
     
