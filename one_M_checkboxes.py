@@ -407,10 +407,8 @@ def web():
                         else: classification = "Human"
 
                         #update record while preserving old data, only over write whats new
-                        updated_record = { **record, "isp": isp, "org": geo.get("org", isp),
-                                        "is_hosting": is_hosting, "classification": classification,
-                                        "usage_type": "Data Center" if is_hosting else "Residential"
-                                        }
+                        updated_record = { **record, "isp": isp, "org": geo.get("org", isp), "is_hosting": is_hosting, 
+                                        "classification": classification, "usage_type": usage_type }#"Data Center" if is_hosting else "Residential" }
 
                         await redis.set(key, json.dumps(updated_record))
                         updated_count +=1
@@ -422,7 +420,8 @@ def web():
                 except Exception as e:
                     print(f"[MIGRATION] Error updating {ip}: {e}")
                 await asyncio.sleep(0.5)
-
+            await redis.set(key, json.dumps(record))
+            updated_count += 1
         return f"Success! {updated_count} records enriched."
     
     @app.get("/stats")
@@ -509,17 +508,7 @@ def web():
                             data-y_margin="0">
                         </script>
                     """),
-                    #style="display: flex; justify-content: center; margin-bottom: 20px;"
-                #),
-                    # fh.A(
-                    #     fh.Img(
-                    #         src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png", #or external link from github
-                    #         alt = "Buy Me A Coffee",
-                    #         style= "height: 60px !important; width: 217px !important;"
-                    #         ),
-                    #     href="https://buymeacoffee.com/gptagent.unlock/checkout",
-                    #     target="_blank"
-                    #     ),
+                    
                     fh.H1(f" One Million Checkboxes"),
                     style="display: flex; flex-direction: column; align-items: center; gap: 10px;" 
                 ),
