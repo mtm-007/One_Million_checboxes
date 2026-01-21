@@ -370,7 +370,6 @@ def web():
     async def fix_data():
         print("[MIGRATION] Starting visitor data migration for legacy record...")
         visitor_keys = await redis.keys("visitor:*")
-        print(f"[MIGRATION] Found {len(visitor_keys)} records to check.")
         updated_count = 0
 
         for key in visitor_keys:
@@ -383,46 +382,21 @@ def web():
             #if "classification" not in record:
                 ip = record.get("ip")
                 print(f"[MIGRATION] Fetching missing data for: {ip}")
-                try:
-                    async with httpx.AsyncClient(timeout=3.0) as client:
-                        r = await client.get(f"http://ip-api.com/json/{ip}?fields=66842239")
-                    if r.status_code == 200:
-                        geo = r.json()
-                        isp = geo.get("isp") or geo.get("org") or "Unknown"
-                        is_hosting = geo.get("is_hosting",False)
-                        
-                        #check redis cache first, then hit api
-                        #geo_data = await get_geo_from_providers(ip, redis)
+                #calls existing smart logic function
+                geo_data = await get_geo(ip, redis)
 
-                        #re-run bot detection logic on old records
-                        ua_lower = record.get("user_agent", "").lower()
-                        is_cloud = "icloud" in isp or "apple relay" in isp
-                        #is_hosting = geo_data.get("is_hosting",False)
-                        #is_relay = geo_data.get("is_relay",False)
+                #update record while preserving old data, only over write whats new
+                record.update({ "isp": geo_data.get("isp") or "-",
+                                "usage_type": geo_data.geet("usage_type", "Unknown"),
+                                "classification": record.get("classification") or "Human",
+                                "city": record.get("city") or geo_data.get("city"),
+                                "country": record.get("country") or geo_data.get("country") })
 
-                        if any(bot in ua_lower for bot in ["googlebot", "bingbot", "yandexbot", "baiduspider", "duckduckbot"]): classification = "Good Bot (Search Engine)"
-                        #elif is_relay: classification = "Human (Privacy/Relay)"
-                        elif is_cloud: classification = "Human (Privacy/Relay)"
-                        elif is_hosting or any(s in ua_lower for s in ["python-requests", "aiohttp", "curl", "wget", "postman", "headless"]): classification = "Bot/Server"
-                        else: classification = "Human"
+                print(f"[MIGRATION]Filled missong ISP for: {ip}")
 
-                        #update record while preserving old data, only over write whats new
-                        updated_record = { **record, "isp": isp, "org": geo.get("org", isp), "is_hosting": is_hosting, 
-                                        "classification": classification, "usage_type": usage_type }#"Data Center" if is_hosting else "Residential" }
-
-                        await redis.set(key, json.dumps(updated_record))
-                        updated_count +=1
-                        
-                        print(f"[MIGRATION]Success! updated {ip}: {isp}.")
-
-                        # Very important: Also update the GEO CACHE so future visits are fast
-                        await redis.set(f"geo:{ip}", json.dumps(updated_record))#,ex=86400 * 7)
-                except Exception as e:
-                    print(f"[MIGRATION] Error updating {ip}: {e}")
-                await asyncio.sleep(0.5)
             await redis.set(key, json.dumps(record))
             updated_count += 1
-        return f"Success! {updated_count} records enriched."
+        return f"Success! {updated_count} records updated."
     
     @app.get("/stats")
     async def stats():
