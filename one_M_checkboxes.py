@@ -137,21 +137,9 @@ async def get_geo_from_providers(ip:str, redis):
                 is_relay_val = sec.get("relay", False) or "icloud" in conn.get("isp", "").lower() or "apple" in conn.get("org", "").lower()
 
                 #normalize the data to match entry format
-                return{
-                    "ip": ip,
-                    "city": data.get("city"),
-                    "postal": data.get("postal"),
-                    "country": data.get("country"),
-                    "region": data.get("region"),
-                    "is_vpn": sec.get("vpn", False) or sec.get("proxy", False),
-                    "isp": conn.get("isp"),#data.get("connection", {}).get("isp"),
-                    "is_hosting": sec.get("hosting", False),#critical for bots
-                    "org": conn.get("org"),
-                    "asn": conn.get("asn"),
-                    "usage_type": usage,
-                    "is_relay": is_relay_val,#sec.get("relay", False) or "icloud private relay" in conn.get("isp", "").lower(),
-                    "provider": "ipwho.is"
-                }
+                return{ "ip": ip, "city": data.get("city"), "postal": data.get("postal"), "country": data.get("country"), "region": data.get("region"),
+                        "is_vpn": sec.get("vpn", False) or sec.get("proxy", False), "isp": conn.get("isp"), "is_hosting": sec.get("hosting", False),
+                        "org": conn.get("org"), "asn": conn.get("asn"), "usage_type": usage, "is_relay": is_relay_val, "provider": "ipwho.is" }
     except Exception: pass
     #second provider
     try:
@@ -170,17 +158,10 @@ async def get_geo_from_providers(ip:str, redis):
                 print(f"[GEO] ✅ ip-api.com succesfully resolved {ip}")# -> {data.get('city')}, {data.get('country')}")
                 
                 return {
-                    "ip": ip,
-                    "city": data.get("city"),
-                    "isp": data.get("isp"),
-                    "usage_type": "Privacy Relay" if is_relay_val else usage,
-                    "is_vpn": data.get("proxy", False),
-                    "is_hosting": data.get("hosting", False),
-                    "is_relay": is_relay_val,#"icloud private relay" in data.get("isp", "").lower(),
-                    "provider": "ip-api.com"
+                    "ip": ip, "city": data.get("city"), "isp": data.get("isp"), "usage_type": "Privacy Relay" if is_relay_val else usage,
+                    "is_vpn": data.get("proxy", False), "is_hosting": data.get("hosting", False), "is_relay": is_relay_val, "provider": "ip-api.com"
                 }
-                # await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
-                # return data
+                
     except Exception as e: 
         print(f"[GEO] ❌ ip-api.com failed for  {ip}: {e}")
 
@@ -308,8 +289,7 @@ def web():
             "--port", "6379", "--dir", "/data", #store data in persistent volume
             "--save", "60", "1", #save every minute, if 1 change
             "--save", "" ] #disable all other automatic saves
-        ,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        , stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
 
     time.sleep(1)
@@ -484,9 +464,7 @@ def web():
         return fh.NotStr(html)
     
     async def _render_chunk(client_id:str, offset:int)->str:
-        #lazy load a chunk of checkboxes
-        #await init_checkboxes()
-
+    
         start_idx = offset
         end_idx = min(offset + LOAD_MORE_SIZE, N_CHECKBOXES)
         print(f"[CHUNK] Loading {start_idx:,}-{end_idx:,} for {client_id[:8]}")
@@ -634,13 +612,8 @@ def web():
             is_checked = bool(bit)
 
             diff_array.append(
-                fh.Input(   type="checkbox", id=f"cb-{i}",
-                            checked = is_checked, #uses bitmap
-                            hx_post=f"/toggle/{i}/{client_id}", hx_swap="none",
-                            hx_swap_oob="true",# allows us to later push diffs to arbitrary checkboxes by id
-                            cls= "cb"
-                            )
-        )
+                fh.Input(   type="checkbox", id=f"cb-{i}", checked = is_checked, hx_post=f"/toggle/{i}/{client_id}",
+                            hx_swap="none", hx_swap_oob="true", cls= "cb" ))
         return diff_array
     
     @app.get("/visitors")
