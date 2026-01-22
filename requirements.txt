@@ -2,4 +2,5 @@ python-fasthtml==0.12.36
 redis>=5.3.0
 modal
 pytz
+polars
 aiosqlite
