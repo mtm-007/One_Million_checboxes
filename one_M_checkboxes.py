@@ -679,24 +679,15 @@ def web():
         #Day chart bars ( last 7 days)
         max_count_days = max([count for _,count in sorted_days], default=1) if sorted_days else 1
         now_local = utc_to_local(time.time())
-        #max_count_days = 1
-        #last_7_days = []
         chart_days_data = []
         for i in range(days - 1, -1, -1):
-            #calculate day in local timezone
-            # day_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-            # day_local = day_local - pytz.timezone('America/Chicago').localize(datetime.fromtimestamp(i*86400)
-            # .replace(tzinfo=None).replace(hour=0, minute=0, second=0, microsecond=0))
-            
-            import datetime as dt
             target_date = now_local.date() - dt.timedelta(days=i)
             day_key = target_date.strftime("%Y-%m-%d")
-
             count = sum(1 for v in visitors if utc_to_local(v["timestamp"]).strftime("%Y-%m-%d") == day_key)
             date_display = target_date.strftime("%a-%b-%d")
-            chart_days_data.append((target_date.strftime("%a-%b-%d"), count))
-            #last_7_days.append((day_key, count))
-            #max_count_days = max(max_count_days, count)
+            #print(f"[DEBUG CHART] data_display='{date_display}, count={count}")
+            chart_days_data.append((date_display, count))
+            
         max_count = max([c[1] for c in chart_days_data], default=1)
 
         chart_bars_days = []
@@ -704,13 +695,15 @@ def web():
             percentage = (count/ max_count) * 100 if max_count > 0 else 0
             chart_bars_days.append(
                 fh.Div(
+                    fh.Span(date_str, cls="bat-label-horizontal"),
                     fh.Div(
-                        fh.Span(f"{count}", cls="bar-value-horizontal" ,style=f"color: white; font-size: 0.8em; padding-left: 8px;"
+                        fh.Div(
+                            fh.Span(f"{count}", cls="bar-value-horizontal" ,style=f"color: white; font-size: 0.8em; padding-left: 8px;"
                         ) if count > 0 else "",
                         style=f"width: {max(percentage,2) if count > 0 else 0}%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);",
                         cls="bar-fill-horizontal" ),
-                    #fh.Span(date_str, cls="bar-label-vertical"), 
-                    cls="bar-vertical" ) )
+                    cls="bar-track-horizontal" ),
+                cls="bar-horizontal" ))
         
         pagination_controls = fh.Div(
             fh.Div(
@@ -745,20 +738,19 @@ def web():
                     fh.Div(f"{total_count:,}", cls="stats-number"),
                     fh.Div(f"Database contains {total_in_db:,} Visitor Records", style="font-size: 0.9em; opacity: 0.8;"), 
                     cls="stats-card"),
-                #range_buttons,
                 pagination_controls,
-                #vertical table with day grouping
-            
+                
                 fh.Div(
                     fh.H2(f"Visitors by Day - Central Time)", cls="section-title", style="margin: 0;"),
                     range_buttons,
                     style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 15px;"),
+                fh.Div(
                     fh.Div(
-                        #*chart_bars_days, cls="chart_bars_container"),cls="chart_container"
-                        *chart_bars_days if chart_bars_days else [
-                            fh.P("No visitors data yet", style="text-align: center; color:#999;")],
-                        cls="chart-bars-container" ), 
-                    cls="chart-container" ),
+                    #*chart_bars_days, cls="chart_bars_container"),cls="chart_container"
+                    *chart_bars_days if chart_bars_days else [
+                        fh.P("No visitors data yet", style="text-align: center; color:#999;")],
+                    cls="chart-bars-container"), 
+                cls="chart-container" ),
 
                 #visitors table with day grouping
                 fh.Div(
