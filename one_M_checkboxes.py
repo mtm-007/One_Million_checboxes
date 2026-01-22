@@ -14,6 +14,7 @@ import subprocess
 import pytz
 from datetime import datetime, timezone
 from redis.asyncio import Redis
+import datetime as dt
 import sqlite3
 import aiosqlite
 
@@ -591,8 +592,9 @@ def web():
         return diff_array
     
     @app.get("/visitors")
-    async def visitors_page(request, offset: int = 0, limit: int = 5):#100):
-        print(f"[VISITORS] Loading visitors page (offset={offset}, limit={limit})..")
+    async def visitors_page(request, offset: int = 0, limit: int = 5, days: int= 30):#100):
+        days = max(7, min(days, 30))
+        print(f"[VISITORS] Loading visitors dashboard: offset={offset}, limit={limit}, window={days}")
         recent_ips = await redis.zrange("recent_visitors_sorted", offset, offset + limit - 1, desc=True)
         print(f"[VISITORS] Found {len(recent_ips)} IPs in sorted set")
 
@@ -647,7 +649,7 @@ def web():
             table_content.append(
                 fh.Tr( fh.Td( fh.Div(
                             fh.Strong(day_display), fh.Span(f" ({visitor_count} visitor{'s' if visitor_count != 1 else ''})",
-                            style="color: #667eea; margin-left: 10px;"), style="padding: 10px 0;" ), colspan=9, cls="day-separator" )))
+                            style="color: #667eea; margin-left: 10px;"), style="padding: 10px 0;" ), colspan=10, cls="day-separator" )))
 
             #add visitors rows for this day
             for v in day_visitors:
@@ -656,7 +658,7 @@ def web():
 
                 if is_relay: security_badge = fh.Span("iCloud Relay", cls="badge badge-relay", style="background:#5856d6; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
                 elif is_vpn: security_badge = fh.Span("VPN/PROXY", cls="badge badge-vpn", style="background:#ff3b30; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
-                else: security_badge = fh.Span("Clean", cls="badge badge-relay", style="background:#4cd964; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
+                else: security_badge = fh.Span("Clean", cls="badge badge-clean", style="background:#4cd964; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;")
 
                 #classification and usage label
                 usage = v.get("usage_type", "Residential")
@@ -664,11 +666,11 @@ def web():
                 class_color = "#ff9500" if "Bot" in classification else "#007aff"
                 category_cell = fh.Div(
                     fh.Div(classification, style=f"font-weight:bold; color:{class_color};"),
-                    fh.Div(usage, style = "font-size:0.8em opacity:0.7;"),
+                    fh.Div(usage, style = "font-size:0.8em; opacity:0.7;"),
                 )
 
                 local_dt = utc_to_local(v["timestamp"])
-                local_time_str = local_dt.strftime("%H:%H:%S")
+                local_time_str = local_dt.strftime("%H:%M:%S")
         
                 table_content.append(
                     fh.Tr(  fh.Td(v.get("ip")), fh.Td(v.get("device", "Unknown ?")), fh.Td(security_badge), fh.Td(category_cell), fh.Td(v.get("isp") or "-", style="max-width:150px;overflow:hidden;text-overflow:ellipsis; white-space:nowrap; font-size:0.85em;"),
@@ -676,38 +678,43 @@ def web():
                             fh.Td(fh.Span(f"{v.get('visit_count', 1)}", cls="visit-badge")), fh.Td(local_time_str), cls="visitor-row" ))
         #Day chart bars ( last 7 days)
         max_count_days = max([count for _,count in sorted_days], default=1) if sorted_days else 1
-        now_ts = time.time()
-        now_local = utc_to_local(now_ts)
-        max_count_days = 1
-        last_7_days = []
-        for i in range(6,-1,-1):
+        now_local = utc_to_local(time.time())
+        #max_count_days = 1
+        #last_7_days = []
+        chart_days_data = []
+        for i in range(days - 1, -1, -1):
             #calculate day in local timezone
-            day_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-            day_local = day_local - pytz.timezone('America/Chicago').localize(datetime.fromtimestamp(i*86400)
-            .replace(tzinfo=None).replace(hour=0, minute=0, second=0, microsecond=0))
+            # day_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            # day_local = day_local - pytz.timezone('America/Chicago').localize(datetime.fromtimestamp(i*86400)
+            # .replace(tzinfo=None).replace(hour=0, minute=0, second=0, microsecond=0))
             
             import datetime as dt
             target_date = now_local.date() - dt.timedelta(days=i)
             day_key = target_date.strftime("%Y-%m-%d")
 
-            count = sum(1 for v in visitors
-                         if utc_to_local(v["timestamp"]).strftime("%Y-%m-%d") == day_key)#, time.localtime(v["timestamp"])) == day_key)
-            last_7_days.append((day_key, count))
-            max_count_days = max(max_count_days, count)
+            count = sum(1 for v in visitors if utc_to_local(v["timestamp"]).strftime("%Y-%m-%d") == day_key)
+            date_display = target_date.strftime("%a-%b-%d")
+            chart_days_data.append((target_date.strftime("%a-%b-%d"), count))
+            #last_7_days.append((day_key, count))
+            #max_count_days = max(max_count_days, count)
+        max_count = max([c[1] for c in chart_days_data], default=1)
 
         chart_bars_days = []
-        for date_str, count in last_7_days:
-            display_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%a,%b %d")
-            percentage = (count/ max_count_days) * 100
+        for date_str, count in chart_days_data:
+            percentage = (count/ max_count) * 100 if max_count > 0 else 0
             chart_bars_days.append(
                 fh.Div(
                     fh.Div(
-                        fh.Span(f"{count}", cls="bar-value") if count > 0 else "", style=f"height: {max(percentage,2)}%",  cls="bar-fill-vertical" ),
-                    fh.Span(display_date, cls="bar-label-vertical"), cls="bar-vertical" ) )
+                        fh.Span(f"{count}", cls="bar-value-horizontal" ,style=f"color: white; font-size: 0.8em; padding-left: 8px;"
+                        ) if count > 0 else "",
+                        style=f"width: {max(percentage,2) if count > 0 else 0}%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);",
+                        cls="bar-fill-horizontal" ),
+                    #fh.Span(date_str, cls="bar-label-vertical"), 
+                    cls="bar-vertical" ) )
         
         pagination_controls = fh.Div(
             fh.Div(
-                fh.A("<- Previous", href=f"/visitors?offset={prev_offset}&limit={limit}", cls="pagination-btn"
+                fh.A("<- Previous", href=f"/visitors?offset={prev_offset}&limit={limit}&days={days}", cls="pagination-btn"
                 ) if prev_offset is not None else fh.Span("<- Previous", cls="pagination-btn disabled"),
                 fh.Span(  f"Showing {offset + 1}-{min(offset + limit, total_in_db)} of {total_in_db} visitors", cls="pagination-info"),
                 fh.A("Next ->", href=f"/visitors?offset={next_offset}&limit={limit}", cls="pagination-btn"
@@ -715,40 +722,58 @@ def web():
                 
             fh.Div(
                 fh.Span("show: ", style="margin-right: 10px;"),
-                fh.A("50", href=f"/visitors?offset=0&limit=50", cls="limit-btn" + (" active" if limit == 50 else "")),
+                fh.A("50", href=f"/visitors?offset=0&limit=50&days={days}", cls="limit-btn" + (" active" if limit == 50 else "")),
                 fh.A("100", href=f"/visitors?offset=0&limit=100", cls="limit-btn" + (" active" if limit == 100 else "")),
                 fh.A("200", href=f"/visitors?offset=0&limit=200", cls="limit-btn" + (" active" if limit == 200 else "")), 
                 fh.A("500", href=f"/visitors?offset=0&limit=500", cls="limit-btn" + (" active" if limit == 500 else "")),
                 cls="limit-controls" ), cls="pagination-wrapper")
+        
+        range_buttons = fh.Div(
+            fh.Span("chart Range: ", style="margin-right: 10px; font-weight: bold; color: #667eea;"),
+            fh.A("7", href=f"/visitors?days=7&limit={limit}&offset={offset}", cls=f"range-btn {'active' if days==7 else ''}", title ="Last 7 days"),
+            fh.A("14", href=f"/visitors?days=14&limit={limit}&offset={offset}", cls=f"range-btn {'active' if days==14 else ''}", title ="Last 7 days"),
+            fh.A("30", href=f"/visitors?days=30&limit={limit}&offset={offset}", cls=f"range-btn {'active' if days==30 else ''}", title ="Last 7 days"),
+            cls="range-selector")
+        
         return (
-            fh.Titled("Visitors Page Records",
+            fh.Titled("Visitors Dashboard Records",
             #add mobile-friendly meta tags
-            fh.Meta(name="viewport", content="width=device-width, initial-scale=1.0, maximum-scale=5.0")),
+                fh.Meta(name="viewport", content="width=device-width, initial-scale=1.0, maximum-scale=5.0")),
             fh.Main( fh.H1("Recent Visitors Dashboard", cls="dashboard-title"),
                 fh.Div(
-                    fh.Div("Total Unique Visitors", cls="stats-label"), fh.Div(f"{total_count:,}", cls="stats-number"),
-                    fh.Div(f"Database contains {total_in_db:,} Visitor Records",
-                            style="font-size: 0.9em; opacity: 0.8;"), cls="stats-card"),
+                    fh.Div("Total Unique Visitors", cls="stats-label"), 
+                    fh.Div(f"{total_count:,}", cls="stats-number"),
+                    fh.Div(f"Database contains {total_in_db:,} Visitor Records", style="font-size: 0.9em; opacity: 0.8;"), 
+                    cls="stats-card"),
+                #range_buttons,
                 pagination_controls,
                 #vertical table with day grouping
+            
                 fh.Div(
-                    fh.H2("Visitors by Day (Last 7 days - Central Time)", cls="section-title"),
+                    fh.H2(f"Visitors by Day - Central Time)", cls="section-title", style="margin: 0;"),
+                    range_buttons,
+                    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 15px;"),
                     fh.Div(
+                        #*chart_bars_days, cls="chart_bars_container"),cls="chart_container"
                         *chart_bars_days if chart_bars_days else [
                             fh.P("No visitors data yet", style="text-align: center; color:#999;")],
-                        cls="chart-bars-container" ), cls="chart-container" ),
+                        cls="chart-bars-container" ), 
+                    cls="chart-container" ),
+
                 #visitors table with day grouping
                 fh.Div(
-                    fh.H2(f"Visitors Dashboard (Last {limit} Visitors)", cls="section-title"),
-                    fh.Div(fh.P("<- Scroll horizontal to see all columns ->",
-                        style="text-align: center; color:#999; font-size: 0.85em; margin-bottom: 10px; display: none;",cls="mobile-control-hint"),
-                    fh.Table(
-                        fh.Tr( fh.Th("IP"), fh.Th("device"), fh.Th("Security"), fh.Th("Category"), fh.Th("ISP/Org"), fh.Th("City"), fh.Th("Zip"), fh.Th("Country"), fh.Th("Visits"), fh.Th("Last seen"), ),
-                        *table_content, cls="table visitors-table"
-                    )if table_content else fh.P("No visitors to display", style="text-align: center; color:#999; padding: 20px;"),
-                    style="overflow-x: auto; -webkit-overflow-scrolling: touch;")),
+                    fh.H2(f"Visitors Dashboard (Last {limit}  Visitors)", cls="section-title"),
+                    fh.Div(
+                        fh.P("<- Scroll horizontal to see all columns ->",
+                            style="text-align: center; color:#999; font-size: 0.85em; margin-bottom: 10px; display: none;",cls="mobile-scroll-hint"),
+                        fh.Table(
+                            fh.Tr( fh.Th("IP"), fh.Th("device"), fh.Th("Security"), fh.Th("Category"), fh.Th("ISP/Org"), fh.Th("City"), fh.Th("Zip"), fh.Th("Country"), fh.Th("Visits"), fh.Th("Last seen"), ),
+                            *table_content, cls="table visitors-table"
+                        )if table_content else fh.P("No visitors to display", style="text-align: center; color:#999; padding: 20px;"),
+                        style="overflow-x: auto; -webkit-overflow-scrolling: touch;")),
                 pagination_controls,
-                fh.Div(  fh.A("<- Back to checkboxes", href="/", cls="back-link"), style="text-align: center; margin-top: 30px;" ), cls="visitors-container" ))
+                fh.Div(  fh.A("<- Back to checkboxes", href="/", cls="back-link"), style="text-align: center; margin-top: 30px;" ), cls="visitors-container" 
+                      ))
     return app
 
 class Client:
