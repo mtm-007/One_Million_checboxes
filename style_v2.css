@@ -194,7 +194,7 @@ h1 {
 }
 
 /* Vertical Bar Chart */
-.chart-bars-container {
+/* .chart-bars-container {
     display: flex;
     align-items: flex-end;
     justify-content: space-around;
@@ -202,38 +202,72 @@ h1 {
     gap: 5px;
     padding: 20px 10px;
     border-bottom: 2px solid #ddd;
+} */
+
+* Container for the chart */
+.chart-bars-container {
+    display: flex;
+    align-items: flex-end;
+    height: 300px;
+    gap: 12px;
+    padding: 20px 10px 60px 10px; /* Extra bottom padding for rotated labels */
+    border-bottom: 2px solid #ddd;
+    background: #fff;
+    /* This enables the horizontal slide */
+    overflow-x: auto; 
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
 }
 
-.bar-vertical {
+/* Makes the chart slide horizontally instead of squishing */
+.chart-bars-container.sliding-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    overflow-x: auto; /* This creates the slide */
+    padding-bottom: 30px; /* Space for labels */
+    -webkit-overflow-scrolling: touch; /* Smooth scroll on iPhone */
+}
+
+/* Fixes the width of each bar so they don't shrink */
+/* .bar-vertical {
+    flex: 0 0 45px; 
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+} */
+
+/* .bar-vertical {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: flex-end;
-    flex: 1;
+    flex: 0 0 50px;
     min-width: 30px;
     max-width: 60px;
     height: 100%;
-}
+} */
 
-.bar-fill-vertical {
+/* .bar-fill-vertical {
     width: 100%;
     background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
     border-radius: 4px 4px 0 0;
     transition: height 0.3s ease;
     min-height: 2px;
-}
+} */
 
 .bar-vertical:hover .bar-fill-vertical {
     background: linear-gradient(180deg, #764ba2 0%, #667eea 100%);
 }
 
 .bar-label-vertical {
-    margin-top: 5px;
+    margin-top: 15px;
     font-size: 0.75em;
     color: #666;
     font-weight: 600;
     transform: rotate(-45deg);
-    transform-origin: center;
+    transform-origin: top center;
+    display: block;
     white-space: nowrap;
 }
 
@@ -592,4 +626,156 @@ h1 {
     align-items: center;
     gap: 16px;
     margin-bottom: 20px;
+}
+
+/* ===========================
+   HORIZONTAL CHART BARS
+   =========================== */
+
+   .chart-container {
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 16px;
+    padding: 25px;
+    margin: 30px 0;
+    border: 1px solid rgba(102, 126, 234, 0.1);
+}
+
+.chart-bars-container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 20px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 12px;
+    margin: 0;
+}
+
+.bar-horizontal {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    min-height: 36px;
+}
+
+.bar-label-horizontal {
+    min-width: 100px;
+    font-size: 0.85em;
+    color: #667eea;
+    font-weight: 500;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.bar-track-horizontal {
+    flex: 1;
+    height: 32px;
+    background: rgba(102, 126, 234, 0.1);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+}
+
+.bar-fill-horizontal {
+    height: 100%;
+    min-width: 2%;
+    transition: width 0.3s ease;
+    display: flex;
+    align-items: center;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.bar-value-horizontal {
+    white-space: nowrap;
+}
+
+/* ===========================
+   RANGE SELECTOR TOGGLE
+   =========================== */
+
+.range-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(102, 126, 234, 0.1);
+    padding: 4px;
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+
+.range-btn {
+    padding: 8px 16px;
+    background: transparent;
+    color: #667eea;
+    text-decoration: none;
+    border-radius: 6px;
+    font-weight: 500;
+    font-size: 0.9em;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    border: 1px solid transparent;
+    min-width: 40px;
+    text-align: center;
+}
+
+.range-btn:hover {
+    background: rgba(102, 126, 234, 0.15);
+    transform: translateY(-1px);
+}
+
+.range-btn.active {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .bar-label-horizontal {
+        min-width: 80px;
+        font-size: 0.75em;
+    }
+    
+    .bar-track-horizontal {
+        height: 28px;
+    }
+    
+    .bar-value-horizontal {
+        font-size: 0.7em !important;
+        padding-left: 5px !important;
+    }
+    
+    .range-selector {
+        width: 100%;
+        justify-content: center;
+    }
+    
+    .range-btn {
+        flex: 1;
+        padding: 8px 12px;
+        font-size: 0.85em;
+    }
+}
+
+@media (max-width: 480px) {
+    .bar-horizontal {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 5px;
+    }
+    
+    .bar-label-horizontal {
+        text-align: left;
+        min-width: auto;
+    }
+    
+    .bar-track-horizontal {
+        width: 100%;
+    }
+    
+    .range-btn {
+        padding: 6px 10px;
+        font-size: 0.8em;
+    }
 }
