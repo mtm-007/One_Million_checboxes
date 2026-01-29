@@ -4,3 +4,5 @@ modal
 pytz
 polars
 aiosqlite
+rdbtools 
+python-lzf
