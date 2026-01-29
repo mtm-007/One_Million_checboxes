@@ -9,7 +9,7 @@ from modal import Image
 import fasthtml.common as fh
 import httpx
 import asyncio
-import json
+import json, os
 import subprocess
 import pytz
 from datetime import datetime, timezone
@@ -207,20 +207,30 @@ async def record_visitors(ip, user_agent, geo, redis):
         ua_lower = user_agent.lower()
         device_str = get_device_info(user_agent)
         is_hosting = geo.get("is_hosting", False)
-        is_relay = geo.get("is_relay", False)
-
+       
         #Known Good Bots (Search Engines)
-        good_bots = ["googlebot", "bingbot", "yandexbot", "baiduspider", "duckduckbot"]
-        is_good_bot = any(bot in ua_lower for bot in good_bots)
+        known_bots = {
+            "googlebot": "Googlebot",
+            "bingbot": "Bingbot",
+            "twitterbot": "Twitterbot",
+            "facebookexternalhit": "FacebookBot",
+            "duckduckbot": "DuckDuckBot",
+            "baiduspider": "Baiduspider",
+            "yandexbot": "YandexBot",
+            "ia_archiver": "Alexa/Archive.org",
+            "gptbot": "ChatGPT-Bot",
+            "perplexitbot": "PerplexityAI"
+        }
+        detected_bot_name = None
+        for bot_key, display_name in known_bots.items():
+            if bot_key in ua_lower:
+                detected_bot_name = display_name
+                break
         
-        #programming libraries/scrapers
-        scripts = ["python-requests", "aiohttp", "curl", "wget", "postman", "headless"]
-        is_script = any(s in ua_lower for s in scripts)
-
-        #final classsification
-        if is_good_bot: classification = "Good Bot (Search Engine)"
-        elif is_relay: classification = "Human (Privacy/Relay)"
-        elif is_hosting or is_script: classification = "Bot/Server"
+        if detected_bot_name:classification = detected_bot_name
+        elif any(s in ua_lower for s in ["python-requests", "aiohttp", "curl", "wget", "postman", "headless"]): classification = "Script/Scraper"
+        elif is_hosting: classification = "Bot/Server"
+        elif geo.get("is_relay", False): classification = "Human (Privacy/Relay)"
         else: classification = "Human"
 
         visit_count = (json.loads(existing).get("visit_count", 1) + 1) if existing else 1
@@ -248,7 +258,6 @@ async def record_visitors(ip, user_agent, geo, redis):
 css_path_local = Path(__file__).parent / "style_v2.css"
 css_path_remote = "/assets/style_v2.css"
 
-
 #helper function for ip address
 def get_real_ip(request):
     """get real client IP,accounting for proxies and cloudflare"""
@@ -270,6 +279,9 @@ def get_real_ip(request):
     #fallback to direct client host 
     return request.client.host
 
+# IS_DEV_MODE = os.environ.get("MODAL_ENVIRONMENT", "prod") == "dev"
+# print(f"[MODULE INIT] Dev mode: {IS_DEV_MODE}")
+
 app_image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("python-fasthtml==0.12.36", "httpx==0.27.0" ,"redis>=5.3.0", "pytz", "aiosqlite")
@@ -280,6 +292,34 @@ app_image = (
 @modal.concurrent(max_inputs=1000)
 @modal.asgi_app()
 def web():
+    # is_serve = os.environ.get("MODAL_SERVE") == "1"
+    # from modal import is_interactive
+    # is_dev = is_serve or is_interactive()
+
+    # print(f"[DEBUG] MODAL_SERVE env value: {os.environ.get('MODAL_SERVE')}")
+    # print(f"[DEBUG] Is dev mode: {is_dev}")
+    
+    # active_dir = "/tmp/redis-test" if is_dev else "/data"
+    
+    # if is_dev:
+    #     os.makedirs(active_dir, exist_ok=True)
+    #     print(f"🔧 DEV MODE: Using temporary Redis at {active_dir}")
+    #     save_args = ["--save", ""]#disable snapshots in sandbox
+    # else:
+    #     print(f"🚀 PRODUCTION MODE: Persistence enabled at {active_dir}")
+    #     save_args = ["--save", "60", "1", "--save", ""]
+
+    # # Start redis server locally inside the container (persisted to volume)
+    # redis_process = subprocess.Popen(
+    #     [   "redis-server", "--protected-mode", "no", "--bind","127.0.0.1", 
+    #         "--port", "6379", "--dir", active_dir, #store data in persistent volume
+    #         # "--save", "60", "1", #save every minute, if 1 change
+    #         # "--save", "" ] #disable all other automatic saves
+    #         *save_args]
+    #     , stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    # )
+    # time.sleep(1)
+
     # Start redis server locally inside the container (persisted to volume)
     redis_process = subprocess.Popen(
         [   "redis-server", "--protected-mode", "no", "--bind","127.0.0.1", 
@@ -292,7 +332,7 @@ def web():
 
     redis = Redis.from_url("redis://127.0.0.1:6379")
     print("Redis server started succesfully with persistent storage")
-
+    
     async def startup_migration():
         """Run migration on startup - initialize SQLite """
         await init_sqlite_db()
@@ -413,29 +453,43 @@ def web():
         visitor_keys = await redis.keys("visitor:*")
         updated_count = 0
 
+        known_bots = {
+        "googlebot": "Googlebot",
+        "bingbot": "Bingbot",
+        "twitterbot": "Twitterbot",
+        "facebookexternalhit": "FacebookBot",
+        "duckduckbot": "DuckDuckBot",
+        "gptbot": "ChatGPT-Bot"
+        }
+
         for key in visitor_keys:
             raw_data = await redis.get(key)
             if not raw_data: continue
+
             record = json.loads(raw_data)
-            record["device"] = get_device_info(record.get("user_agent", ""))
+            ua_lower = record.get("user_agent", "").lower()
+            old_class = record.get("classification", "Human")
 
-            if "isp" not in record or record.get("isp") in ["-", "Unknown", "Unknown (Legacy)"]:
-                ip = record.get("ip")
-                print(f"[MIGRATION] Fetching missing data for: {ip}")
-               
-                geo_data = await get_geo(ip, redis)
+            #Reset new classfication for every visitor in the loop
+            new_classification = None
 
-                #update record while preserving old data, only over write whats new
-                record.update({ "isp": geo_data.get("isp") or "-", "usage_type": geo_data.geet("usage_type", "Unknown"),
-                                "classification": record.get("classification") or "Human", "city": record.get("city") or geo_data.get("city"),
-                                "country": record.get("country") or geo_data.get("country") })
+            for bot_key, display_name in known_bots.items():
+                if bot_key in ua_lower:
+                    new_classification = display_name
+                    break
+            
+            if new_classification and new_classification != old_class:
+                #update only the classification
+                record["classification"] = new_classification
 
-                print(f"[MIGRATION]Filled missong ISP for: {ip}")
+                await redis.set(key, json.dumps(record))
+                await save_visitor_to_sqlite(record)
 
-            await redis.set(key, json.dumps(record))
-            await save_visitor_to_sqlite(record)
-            updated_count += 1
-        return f"Success! {updated_count} records updated."
+                updated_count += 1
+                print(f"[MIGRATION] Updated {record.get('ip')}: {old_class} -> {new_classification}")
+
+        print(f"[MIGRATION] Completed. Total records updated: {updated_count}")
+        return f"Success! {updated_count} records re-classified to specific bot names."
     
     @app.get("/stats")
     async def stats():
