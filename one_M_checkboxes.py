@@ -52,7 +52,7 @@ async def init_sqlite_db():
     async with aiosqlite.connect(SQLITE_DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS visitors (
-                ip TEXT PRIMARY KEY, device TEXT, user_agent TEXT, classification TEXT, usage_type TEXT, isp TEXT, city TEXT
+                ip TEXT PRIMARY KEY, device TEXT, user_agent TEXT, classification TEXT, usage_type TEXT, isp TEXT, city TEXT,
                 zip TEXT, is_vpn INTEGER, country TEXT, timestamp REAL , visit_count INTEGER, last_updated REAL )""")
         
         await db.execute(""" 
