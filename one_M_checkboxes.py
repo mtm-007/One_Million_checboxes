@@ -1,54 +1,32 @@
-import time
+import time,asyncio, json,subprocess, pytz, httpx, modal
 from asyncio import Lock
 from pathlib import Path
 from uuid import uuid4
 from fasthtml.core import viewport
 from fasthtml.js import NotStr
-import modal
-from modal import Image
 import fasthtml.common as fh
-import httpx
-import asyncio
-import json, os
-import subprocess
-import pytz
 from datetime import datetime, timezone
 from redis.asyncio import Redis
 import datetime as dt
-import sqlite3
-import aiosqlite
-
 import utils
 
 N_CHECKBOXES=1000000
 VIEW_SIZE= 5000
 LOAD_MORE_SIZE= 2000
 
-app = modal.App("one-million-checkboxes")
-
-volume = modal.Volume.from_name("redis-data-vol", create_if_missing=True)
-
-#checkboxes_key = "checkboxes"
 checkboxes_bitmap_key= "checkboxes_bitmap"
-
 clients = {}
 clients_mutex = Lock()
-
 checkbox_cache = {}
-#checkbox_cache_loaded_at = 0.0
-#CHECKBOX_CACHE_TTL = 600 #keep for 10 minutes in memory
 
-#GEO_TTL_REDIS = 86400 
-  #client level in memory small cache (5min)
 LOCAL_TIMEZONE = pytz.timezone("America/Chicago")
-
 SQLITE_DB_PATH = "/data/visitors.db"
 
 css_path_local = Path(__file__).parent / "style_v2.css"
 css_path_remote = "/assets/style_v2.css"
 
-#helper function for ip address
-
+app = modal.App("one-million-checkboxes")
+volume = modal.Volume.from_name("redis-data-vol", create_if_missing=True)
 
 app_image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -194,15 +172,11 @@ def web():
         print("[MIGRATION] Starting visitor data migration for legacy record...")
         visitor_keys = await redis.keys("visitor:*")
         updated_count = 0
-
+        
         known_bots = {
-        "googlebot": "Googlebot",
-        "bingbot": "Bingbot",
-        "twitterbot": "Twitterbot",
-        "facebookexternalhit": "FacebookBot",
-        "duckduckbot": "DuckDuckBot",
-        "gptbot": "ChatGPT-Bot"
-        }
+            "googlebot": "Googlebot", "bingbot": "Bingbot", "twitterbot": "Twitterbot", "facebookexternalhit": "FacebookBot", "duckduckbot": "DuckDuckBot", 
+            "baiduspider": "Baiduspider", "yandexbot": "YandexBot","ia_archiver": "Alexa/Archive.org", "gptbot": "ChatGPT-Bot", "perplexitbot": "PerplexityAI"
+            }
 
         for key in visitor_keys:
             raw_data = await redis.get(key)
@@ -563,4 +537,3 @@ def web():
                 fh.Div(  fh.A("<- Back to checkboxes", href="/", cls="back-link"), style="text-align: center; margin-top: 30px;" ), cls="visitors-container" 
                       ))
     return app
-

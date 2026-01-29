@@ -1,28 +1,19 @@
-import time
+import time,asyncio, json,subprocess, pytz, httpx, modal
 from asyncio import Lock
 from pathlib import Path
 from uuid import uuid4
 from fasthtml.core import viewport
 from fasthtml.js import NotStr
-import modal
-from modal import Image
 import fasthtml.common as fh
-import httpx
-import asyncio
-import json, os
-import subprocess
-import pytz
 from datetime import datetime, timezone
 from redis.asyncio import Redis
 import datetime as dt
-import sqlite3
 import aiosqlite
 
 CLIENT_GEO_TTL = 300.0
 LOCAL_TIMEZONE = pytz.timezone("America/Chicago")
 
 SQLITE_DB_PATH = "/data/visitors.db"
-
 
 class Client:
     def __init__(self):
@@ -51,7 +42,6 @@ class Client:
     def has_recent_geo(self, now=None):
         now = now or time.time()
         return (self.geo is not None) and ((now - self.geo_ts) <= CLIENT_GEO_TTL)
-
 
 def utc_to_local(timestamp):
     utc_dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
