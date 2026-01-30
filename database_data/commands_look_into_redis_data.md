@@ -4,5 +4,6 @@ To Read Redis data cache, its in byte format so can use tools to convert it to j
 - pip install rdbtools python-lzf
 ```bash
 rdb --command json dump.rdb > redis_content.json
+python -m rdbtools.cli.rdb --command json redis_db_3.rdb > redis_content_3.json
 cat redis_content.json
 ```

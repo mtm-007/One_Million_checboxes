@@ -10,14 +10,11 @@ from redis.asyncio import Redis
 import datetime as dt
 import utils
 
-N_CHECKBOXES=1000000
-VIEW_SIZE= 5000
-LOAD_MORE_SIZE= 2000
+N_CHECKBOXES, VIEW_SIZE, LOAD_MORE_SIZE = 1000000, 5000, 2000
 
 checkboxes_bitmap_key= "checkboxes_bitmap"
-clients = {}
+checkbox_cache, clients = {} , {}
 clients_mutex = Lock()
-checkbox_cache = {}
 
 LOCAL_TIMEZONE = pytz.timezone("America/Chicago")
 SQLITE_DB_PATH = "/data/visitors.db"
@@ -32,15 +29,13 @@ app_image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("python-fasthtml==0.12.36", "httpx==0.27.0" ,"redis>=5.3.0", "pytz", "aiosqlite")
     .apt_install("redis-server").add_local_file(css_path_local,remote_path=css_path_remote)
-    # This is the key: it adds utils.py and makes it importable
-    .add_local_python_source("utils")
+    .add_local_python_source("utils")# This is the key: it adds utils.py and makes it importable
     )
 
 @app.function( image = app_image, max_containers=1, volumes={"/data": volume}, timeout=3600,) #keep_warm=1,
 @modal.concurrent(max_inputs=1000)
 @modal.asgi_app()
-def web():
-    # Start redis server locally inside the container (persisted to volume)
+def web():# Start redis server locally inside the container (persisted to volume)
     redis_process = subprocess.Popen(
         [   "redis-server", "--protected-mode", "no", "--bind","127.0.0.1", 
             "--port", "6379", "--dir", "/data", #store data in persistent volume
@@ -65,34 +60,28 @@ def web():
                 await utils.estore_visitors_from_sqlite(redis)
 
         await redis.setbit(checkboxes_bitmap_key, N_CHECKBOXES - 1, 0)
-        print("[STARTUP] Bitmap initialized/verified")
-        print("[STARTUP] Migration check complete")
-    
+        print("[STARTUP] Bitmap initialized/verified,... Migration check complete")
+       
     async def get_checkbox_range_cached(start_idx: int, end_idx:int):
         """ Load a specific range of chekcboxes, with caching"""
-        #check if we have them in cache
-        cached_values = []
-        missing_indices = []
+        cached_values ,missing_indices = [], []
         
         for i in range(start_idx, end_idx):
             if i in checkbox_cache: cached_values.append((i, checkbox_cache[i]))
             else: missing_indices.append(i)
         
         if missing_indices:
-            #use pipeline for batch loading
-            pipe = redis.pipeline()
+            pipe = redis.pipeline() #use pipeline for batch loading
             for idx in missing_indices: pipe.getbit(checkboxes_bitmap_key, idx)
             
             results = await pipe.execute()
 
-            #cache the results
             for idx, result in zip(missing_indices, results):
                 value = bool(result) #json.loads(result) if result is not None else False
                 checkbox_cache[idx] = value
                 cached_values.append((idx, value))
 
-        #sort by index to maintain order
-        cached_values.sort(key=lambda x:x[0])
+        cached_values.sort(key=lambda x:x[0])  #sort by index to maintain order
         return [v for _, v in cached_values]
          
     async def get_status():
@@ -106,9 +95,8 @@ def web():
         try:
             await redis.save()
             print("Redis data saved succesfully")
-        except Exception as e:
-            print(f"Error saving Redis data: {e}")
-
+        except Exception as e: print(f"Error saving Redis data: {e}")
+            
         await redis.close() #not necessarily needed here just best practice
         redis_process.terminate()
         redis_process.wait()
@@ -116,11 +104,7 @@ def web():
         print("Volume committed  -data persisted")
 
     style= open(css_path_remote, "r").read()
-    app, _= fh.fast_app(
-        on_startup=[startup_migration],
-        on_shutdown=[on_shutdown],
-        hdrs=[fh.Style(style)],
-    )
+    app, _= fh.fast_app( on_startup=[startup_migration], on_shutdown=[on_shutdown], hdrs=[fh.Style(style)], )
 
     metrics_for_count = { "request_count" : 0,  "last_throughput_log" : time.time() }
     throughput_lock = asyncio.Lock()
@@ -133,7 +117,6 @@ def web():
         duration = (time.time() - start) * 1000 #ms
         print(f"[Latency] {request.url.path} -> {duration:.2f} ms")
 
-        #update throughput counter
         async with throughput_lock:
             metrics_for_count["request_count"] +=1
             now = time.time()
@@ -145,15 +128,13 @@ def web():
                 metrics_for_count["last_throughput_log"] = now
         return response
     
-    @app.get("/restore-from-sqlite")
+    @app.get("/restore-from-sqlite") #Manual endpoint to restore Redis from SQLite backup 
     async def restore_endpoint():
-        """ Manual endpoint to restore Redis from SQLite backup"""
         count = await utils.restore_visitors_from_sqlite(redis)
         return f"Returned {count} visitors from SQLite to Redis"
     
     @app.get("/backup-stats")
     async def backup_stats():
-        """ Show backup statistics"""
         sqlite_count = await utils.get_visitor_count_sqlite()
         redis_count = await redis.get("total_visistors_count")
         redis_count = int(redis_count) if redis_count else 0
@@ -164,8 +145,7 @@ def web():
             fh.P(f"Status: {'In Sync' if sqlite_count == redis_count else 'Out of Sync'}"),
             fh.A("Restore from SQLite", href="/restore-from-sqlite",
                  style="display:block;margin-top:20px;padding:10px;background:#667eea;color:white;text-align:center;border-radius:5px;text-decoration:none;"),
-            style="padding:20px;max-width:600px;margin:50px auto;background:#f7f7f7;border-radius:10px;"
-        )
+            style="padding:20px;max-width:600px;margin:50px auto;background:#f7f7f7;border-radius:10px;" )
         
     @app.get("/fix-my-data")
     async def fix_data():
@@ -173,10 +153,8 @@ def web():
         visitor_keys = await redis.keys("visitor:*")
         updated_count = 0
         
-        known_bots = {
-            "googlebot": "Googlebot", "bingbot": "Bingbot", "twitterbot": "Twitterbot", "facebookexternalhit": "FacebookBot", "duckduckbot": "DuckDuckBot", 
-            "baiduspider": "Baiduspider", "yandexbot": "YandexBot","ia_archiver": "Alexa/Archive.org", "gptbot": "ChatGPT-Bot", "perplexitbot": "PerplexityAI"
-            }
+        known_bots = {  "googlebot": "Googlebot", "bingbot": "Bingbot", "twitterbot": "Twitterbot", "facebookexternalhit": "FacebookBot", "duckduckbot": "DuckDuckBot", 
+                        "baiduspider": "Baiduspider", "yandexbot": "YandexBot","ia_archiver": "Alexa/Archive.org", "gptbot": "ChatGPT-Bot", "perplexitbot": "PerplexityAI" }
 
         for key in visitor_keys:
             raw_data = await redis.get(key)
@@ -220,7 +198,6 @@ def web():
         return fh.NotStr(html)
     
     async def _render_chunk(client_id:str, offset:int)->str:
-    
         start_idx = offset
         end_idx = min(offset + LOAD_MORE_SIZE, N_CHECKBOXES)
         print(f"[CHUNK] Loading {start_idx:,}-{end_idx:,} for {client_id[:8]}")
@@ -233,8 +210,7 @@ def web():
             checked_attr = "checked" if is_checked else ''
             parts.append(
                 f'<input type="checkbox" id="cb-{i}" class="cb" {checked_attr} '
-                f'hx-post="/toggle/{i}/{client_id}" hx-swap="none">'
-            )
+                f'hx-post="/toggle/{i}/{client_id}" hx-swap="none">' )
         html = "".join(parts)
 
         if end_idx < N_CHECKBOXES:
@@ -245,10 +221,8 @@ def web():
                 'hx-trigger="intersect once" '
                 'hx-target="#grid-container" '
                 'hx-swap="beforeend">' 
-                '</span>'
-            )
+                '</span>' )
             html += trigger
-
         return html
     
     @app.get("/")
@@ -256,8 +230,7 @@ def web():
         client_ip = utils.get_real_ip(request)
         user_agent = request.headers.get('user-agent', 'unknown')
 
-        #register a new client
-        client = utils.Client()
+        client = utils.Client()  #register a new client
         async with  clients_mutex:
             clients[client.id] = client
 
@@ -284,9 +257,7 @@ def web():
                         </script>
                     """),
                     
-                    fh.H1(f" One Million Checkboxes"),
-                    style="display: flex; flex-direction: column; align-items: center; gap: 10px;" 
-                ),
+                    fh.H1(f" One Million Checkboxes"), style="display: flex; flex-direction: column; align-items: center; gap: 10px;" ),
                 fh.Div( 
                     fh.Span(f"{checked:,}", cls="status-checked"), " checked • ",
                     fh.Span(f"{unchecked:,}",cls="status-unchecked"), " unchecked", 
@@ -299,9 +270,7 @@ def web():
                     hx_get=f"/diffs/{client.id}",#critical for poll diffs
                     hx_trigger="every 500ms",hx_swap="none"
                 ),
-                fh.Div("Made with FastHTML + Redis deployed with Modal", cls="footer"), 
-                cls="container", 
-                ))
+                fh.Div("Made with FastHTML + Redis deployed with Modal", cls="footer"), cls="container", ))
 
     #users submitting checkbox toggles
     @app.post("/toggle/{i}/{client_id}")
@@ -317,16 +286,13 @@ def web():
 
             new_value = not current
             checkbox_cache[i] = new_value #Update cache
-
             print(f"[TOGGLE] index{i}: {current} -> {new_value}")
 
             try:
                 await redis.setbit(checkboxes_bitmap_key, i, 1 if new_value else 0)
-
                 bit_value = await redis.getbit(checkboxes_bitmap_key, i)
                 print(f"[TOGGLE] Verified bitmap[{i}] = {bit_value}")
-            except Exception as e:
-                print(f"[TOGGLE ERROR] Failed to update Redis: {e}")
+            except Exception as e: print(f"[TOGGLE ERROR] Failed to update Redis: {e}")
 
             expired = []
             for client in clients.values():
@@ -337,7 +303,6 @@ def web():
             for client_id in expired: del clients[client_id]
 
         checked, unchecked = await get_status()
-
         return fh.Div(  fh.Span(f"{checked:,}", cls="status-checked"), " checked • ", fh.Span(f"{unchecked:,}", cls="status-unchecked"),
                         " unchecked", cls="stats", id="stats", hx_get="/stats", hx_trigger="every 1s",hx_swap="outerHTML", hx_swap_oob="true" )
     
@@ -389,7 +354,6 @@ def web():
         next_offset = offset + limit if has_more else None
         prev_offset = max(0, offset - limit) if offset > 0 else None
 
-        #Day status
         day_stats = {}
         for v in visitors:
             local_dt = utils.utc_to_local(v["timestamp"])
@@ -446,8 +410,7 @@ def web():
                     fh.Tr(  fh.Td(v.get("ip")), fh.Td(v.get("device", "Unknown ?")), fh.Td(security_badge), fh.Td(category_cell), fh.Td(v.get("isp") or "-", style="max-width:150px;overflow:hidden;text-overflow:ellipsis; white-space:nowrap; font-size:0.85em;"),
                             fh.Td(v.get("city") or "-"), fh.Td(v.get("zip", "-")), fh.Td(v.get("country") or "-"), 
                             fh.Td(fh.Span(f"{v.get('visit_count', 1)}", cls="visit-badge")), fh.Td(local_time_str), cls="visitor-row" ))
-        #Day chart bars ( last 7 days)
-        max_count_days = max([count for _,count in sorted_days], default=1) if sorted_days else 1
+        
         now_local = utils.utc_to_local(time.time())
         chart_days_data = []
         for i in range(days - 1, -1, -1):
@@ -455,7 +418,6 @@ def web():
             day_key = target_date.strftime("%Y-%m-%d")
             count = sum(1 for v in visitors if utils.utc_to_local(v["timestamp"]).strftime("%Y-%m-%d") == day_key)
             date_display = target_date.strftime("%a-%b-%d")
-            #print(f"[DEBUG CHART] data_display='{date_display}, count={count}")
             chart_days_data.append((date_display, count))
             
         max_count = max([c[1] for c in chart_days_data], default=1)
@@ -500,8 +462,7 @@ def web():
         
         return (
             fh.Titled("Visitors Dashboard Records",
-            #add mobile-friendly meta tags
-                fh.Meta(name="viewport", content="width=device-width, initial-scale=1.0, maximum-scale=5.0")),
+                fh.Meta(name="viewport", content="width=device-width, initial-scale=1.0, maximum-scale=5.0")),  #add mobile-friendly meta tags
             fh.Main( fh.H1("Recent Visitors Dashboard", cls="dashboard-title"),
                 fh.Div(
                     fh.Div("Total Unique Visitors", cls="stats-label"), 
@@ -516,7 +477,6 @@ def web():
                     style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 15px;"),
                 fh.Div(
                     fh.Div(
-                    #*chart_bars_days, cls="chart_bars_container"),cls="chart_container"
                     *chart_bars_days if chart_bars_days else [
                         fh.P("No visitors data yet", style="text-align: center; color:#999;")],
                     cls="chart-bars-container"), 
