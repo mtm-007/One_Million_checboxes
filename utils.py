@@ -53,12 +53,11 @@ async def init_sqlite_db():
     async with aiosqlite.connect(SQLITE_DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS visitors (
-                ip TEXT PRIMARY KEY, device TEXT, user_agent TEXT, classification TEXT, usage_type TEXT, isp TEXT, city TEXT,
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, device TEXT, user_agent TEXT, classification TEXT, usage_type TEXT, isp TEXT, city TEXT,
                 zip TEXT, is_vpn INTEGER, country TEXT, timestamp REAL , visit_count INTEGER, last_updated REAL )""")
         
         await db.execute(""" 
-            CREATE INDEX IF NOT EXISTS idx_timestamp
-            ON visitors(timestamp DESC)""")
+            CREATE INDEX IF NOT EXISTS idx_timestamp ON visitors(timestamp DESC)""")
         await db.commit()
         print("[SQLite] Database initialized succesfully")
 
@@ -67,7 +66,7 @@ async def save_visitor_to_sqlite(entry):
     try:
         async with aiosqlite.connect(SQLITE_DB_PATH) as db:
             await db.execute(""" 
-                INSERT OR REPLACE INTO visitors
+                INSERT INTO visitors
                 (ip, device, user_agent, classification, usage_type, isp, city, zip, is_vpn,  country, timestamp, visit_count, last_updated)
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, ( entry["ip"], entry["device"], entry["user_agent"], entry["classification"], entry["usage_type"], entry["isp"], entry["city"], entry["zip"], 
@@ -76,6 +75,27 @@ async def save_visitor_to_sqlite(entry):
             print(f"[SQLite] Saved visitor {entry['ip']}")
     except Exception as e:
         print(f"[SQLite ERROR] Failed to save visitor: {e}")
+
+
+async def daily_flush_worker(redis):
+    """Background task that flushes Redis visitors to SQLite once a day"""
+    while True:
+        await asyncio.sleep(86400) #waits 24hrs
+        print("[CRON] Starting scheduled daily backup to SQLite...")
+        await flush_redis_to_sqlite(redis)
+
+async def flush_redis_to_sqlite(redis):
+    """The actual logic to move/copy Redis visitor data into SQLite"""
+    print("[BACKUP] Syncing Redis visitors to SQLite...")
+    visitor_keys = await redis.keys("visitor:*")
+
+    for key in visitor_keys:
+        raw_data = await redis.get(key)
+        if raw_data:
+            record = json.loads(raw_data)
+            # This uses your 'INSERT' logic (append-only)
+            await save_visitor_to_sqlite(record)
+    print(f"[BACKUP] Successfully backed up {len(visitor_keys)} records.")
 
 async def restore_visitors_from_sqlite(redis):
     """ Restore all visitor records from  SQLite to Redis"""
