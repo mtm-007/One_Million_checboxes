@@ -16,6 +16,7 @@ from gradio.routes import mount_gradio_app
 
 from modal import ( App, Image, Mount, Secret, Volume, asgi_app, enter, method)
 
+# You can read more about how the values in `TrainConfig` are chosen and adjusted [in this blog post on Hugging Face](https://huggingface.co/blog/dreambooth).
 
 app = App( name = "dreambooth-app")
 image = Image.debian_slim(python_version="3.10").pip_install(   "accelerate==0.27.2", "datasets~=2.13.0", "ftfy~=6.1.0", "gradio~=3.50.2", "smart_open~=6.4.0",
@@ -67,7 +68,8 @@ def load_images(image_urls: list[str]) -> Path:
 
     return img_path
 
-USE_WANDB = False
+USE_WANDB = True
+
 
 @dataclass
 class TrainConfig(SharedConfig):
@@ -89,8 +91,12 @@ class TrainConfig(SharedConfig):
     max_train_steps: int = 80
     checkpointing_steps: int = 1000
     seed: int = 117
+    wandb_project: str = "dreambooth_sdxl_app"
 
-@app.function(image=image, gpu="A100", volumes={MODEL_DIR:volume}, timeout=1800, secrets=[Secret.from_name("my-wandb-secret")] if USE_WANDB else [],)
+@app.function(image=image, gpu="A100", volumes={MODEL_DIR:volume}, timeout=1800, 
+            # This looks for a Secret in your Modal dashboard named 'my-wandb-secret'
+            # which should contain the environment variable WANDB_API_KEY
+            secrets=[Secret.from_name("my-wandb-secret")] if USE_WANDB else [],)
 
 def train(instance_example_urls):
     config = TrainConfig()
@@ -116,28 +122,39 @@ def train(instance_example_urls):
             raise subprocess.CalledProcessError(exitcode, "\n".join(cmd))
     
     print("launching dreambooth training script")
-    _exec_subprocess( [ "accelerate", "launch", "examples/dreambooth/train_dreambooth_lora_sdxl.py",
-                        "--mixed_precision=fp16",
-                        f"--pretrained_model_name_or_path={config.model_name}",
-                        f"--pretrained_vae_model_name_or_path={config.vae_name}",
-                        f"--instance_data_dir={img_path}",
-                        f"--output_dir={MODEL_DIR}",
-                        f"--instance_prompt={prompt}",
-                        f"--resolution={config.resolution}",
-                        f"--train_batch_size={config.train_batch_size}",
-                        f"--gradient_accumulation_steps={config.gradient_accumulation_steps}",
-                        f"--learning_rate={config.learning_rate}",
-                        f"--lr_scheduler={config.lr_scheduler}",
-                        f"--lr_warmup_steps={config.lr_warmup_steps}",
-                        f"--max_train_steps={config.max_train_steps}",
-                        f"--checkpointing_steps={config.checkpointing_steps}",
-                        f"--seed={config.seed}",]
-                    + (
-                        ["--report_to=wandb", f"--validation_prompt={prompt} in space",
-                        f"--validation_epochs={config.max_train_steps // 5}",] if USE_WANDB else []
-                      ),
-                    )
+    cmd =  [    "accelerate", "launch", "examples/dreambooth/train_dreambooth_lora_sdxl.py",
+                "--mixed_precision=fp16",
+                f"--pretrained_model_name_or_path={config.model_name}",
+                f"--pretrained_vae_model_name_or_path={config.vae_name}",
+                f"--instance_data_dir={img_path}",
+                f"--output_dir={MODEL_DIR}",
+                f"--instance_prompt={prompt}",
+                f"--resolution={config.resolution}",
+                f"--train_batch_size={config.train_batch_size}",
+                f"--gradient_accumulation_steps={config.gradient_accumulation_steps}",
+                f"--learning_rate={config.learning_rate}",
+                f"--lr_scheduler={config.lr_scheduler}",
+                f"--lr_warmup_steps={config.lr_warmup_steps}",
+                f"--max_train_steps={config.max_train_steps}",
+                f"--checkpointing_steps={config.checkpointing_steps}",
+                f"--seed={config.seed}",]
+    if USE_WANDB:
+        cmd += [ "--report_to=wandb", 
+                f"--wandb_project={config.wandb_project}",
+                f"--validation_prompt={prompt} in space",
+                f"--validation_epochs={max(1, config.max_train_steps // 5)}", 
+                "--seed=42"] 
+    
+    print("launching dreambooth training script")
+    _exec_subprocess(cmd)                  
     volume.commit()
+
+
+# In order to initialize the model just once on container startup,
+# we use Modal's [container lifecycle](https://modal.com/docs/guide/lifecycle-functions) features, which require the function to be part
+# of a class. Note that the `modal.Volume` we saved the model to is mounted here as well,
+# so that the fine-tuned model created  by `train` is available to us.
+
 
 @app.cls(image=image, gpu="A10G", volumes={MODEL_DIR: volume})
 class Model:
@@ -215,6 +232,20 @@ def fastapi_app():
                 btn = gr.Button(prompt, variant="secondary")
                 btn.click(fn=lambda idx=ii: example_prompts[idx], outputs=inp)
     return mount_gradio_app(app=web_app, blocks=interface, path="/")
+
+
+# ## Running your own Dreambooth from the command line
+#
+# You can use the `modal` command-line interface to set up, customize, and deploy this app:
+#
+# - `modal run dreambooth_app.py` will train the model. Change the `instance_example_urls_file` to point to your own pet's images.
+# - `modal serve dreambooth_app.py` will [serve](https://modal.com/docs/guide/webhooks#developing-with-modal-serve) the Gradio interface at a temporary location. Great for iterating on code!
+# - `modal shell dreambooth_app.py` is a convenient helper to open a bash [shell](https://modal.com/docs/guide/developing-debugging#interactive-shell) in our image. Great for debugging environment issues.
+#
+# Remember, once you've trained your own fine-tuned model, you can deploy it using `modal deploy dreambooth_app.py`.
+#
+# If you just want to try the app out, you can find it at https://modal-labs-example-dreambooth-app-fastapi-app.modal.run
+
 
 
 @app.local_entrypoint()
