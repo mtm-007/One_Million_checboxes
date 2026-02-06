@@ -16,7 +16,7 @@ app = App( name = "dreambooth-app")
 # )
 image = (
     Image.debian_slim(python_version="3.10")
-    .run_commands("echo 'rebuild-v2'")  # Change this string to force rebuild
+    .run_commands("echo 'rebuild-v3'")  # Force rebuild
     .pip_install(
         "accelerate==0.27.2",
         "datasets~=2.13.0",
@@ -29,7 +29,7 @@ image = (
         "wandb==0.16.3",
         "torch==2.2.2+cu121",
         "torchvision==0.17.2+cu121",
-        "diffusers==0.27.2",  # Modern, compatible version
+        "diffusers==0.30.0",  # Use newer version (0.30.0 is compatible)
         extra_options="--extra-index-url https://download.pytorch.org/whl/cu121",
     )
 )
