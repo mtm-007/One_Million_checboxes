@@ -1,36 +1,51 @@
 #dreambooth end to end web app
 from dataclasses import dataclass
 from pathlib import Path
-import torch
-from diffusers import AutoencoderKL, DiffusionPipeline
-from transformers.utils import move_cache
-import PIL.Image
-from smart_open import open
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
-import subprocess
-from accelerate.utils import write_basic_config
-import gradio as gr
-from gradio.routes import mount_gradio_app
-
-from modal import ( App, Image, Mount, Secret, Volume, asgi_app, enter, method)
+from modal import ( App, Image, Secret, Volume, asgi_app, enter, method)
 
 # You can read more about how the values in `TrainConfig` are chosen and adjusted [in this blog post on Hugging Face](https://huggingface.co/blog/dreambooth).
 
 app = App( name = "dreambooth-app")
-image = Image.debian_slim(python_version="3.10").pip_install(   "accelerate==0.27.2", "datasets~=2.13.0", "ftfy~=6.1.0", "gradio~=3.50.2", "smart_open~=6.4.0",
-                                                                "transformers~=4.38.1", "torch~=2.2.0", "torchvision~=0.16", "triton~=2.2.0", "peft==0.7.0", "wandb==0.16.3",)
+# image = (Image.debian_slim(python_version="3.10").pip_install(   "accelerate==0.27.2", "datasets~=2.13.0", "ftfy~=6.1.0", "gradio~=3.50.2", "smart_open~=6.4.0",
+#                                                                 "transformers~=4.35.2", "triton~=2.2.0", "peft==0.7.0", "wandb==0.16.3", #"huggingface_hub==0.17.3", "diffusers==0.27.2",  
+#                                                                 "torch==2.2.2+cu121", "torchvision==0.17.2+cu121",  
+#                                                                 extra_options="--extra-index-url https://download.pytorch.org/whl/cu121",)
+# )
+image = (
+    Image.debian_slim(python_version="3.10")
+    .run_commands("echo 'rebuild-v2'")  # Change this string to force rebuild
+    .pip_install(
+        "accelerate==0.27.2",
+        "datasets~=2.13.0",
+        "ftfy~=6.1.0",
+        "gradio~=3.50.2",
+        "smart_open~=6.4.0",
+        "transformers~=4.38.1",
+        "triton~=2.2.0",
+        "peft==0.7.0",
+        "wandb==0.16.3",
+        "torch==2.2.2+cu121",
+        "torchvision==0.17.2+cu121",
+        "diffusers==0.27.2",  # Modern, compatible version
+        extra_options="--extra-index-url https://download.pytorch.org/whl/cu121",
+    )
+)
 
-GIT_SHA = ( "abd922bd0c43a504e47eca2ed354c3634bd00834")  # specify the commit to fetch )
+                                                                
 
-image = (image.apt_install("git")
-         .run_commands(
-            "cd /root && git init .",
-            "cd /root && git remote add origin https://github.com/huggingface/diffusers",
-            f"cd /root && git fetch --depth=1 origin {GIT_SHA} && git checkout {GIT_SHA}",
-            "cd /root && pip install -e .",
-         ))
+# GIT_SHA = ( "abd922bd0c43a504e47eca2ed354c3634bd00834")  # specify the commit to fetch )
+
+# image = (image.apt_install("git")
+#          .run_commands(
+#             "cd /root && git init .",
+#             "cd /root && git remote add origin https://github.com/huggingface/diffusers",
+#             f"cd /root && git fetch --depth=1 origin {GIT_SHA} && git checkout {GIT_SHA}",
+#             "cd /root && pip install -e .",
+#             "pip install 'huggingface_hub==0.17.3' --force-reinstall",
+#          ))
 
 @dataclass
 class SharedConfig:
@@ -42,6 +57,10 @@ class SharedConfig:
     vae_name: str = "madebyollin/sdxl-vae-fp16-fix"  # required for numerical stability in fp16
 
 def download_models():
+    import torch
+    from diffusers import AutoencoderKL, DiffusionPipeline
+    from transformers.utils import move_cache
+
     config = SharedConfig()
     DiffusionPipeline.from_pretrained(
         config.model_name,
@@ -57,6 +76,9 @@ MODEL_DIR = "/model"
 
 #load dataset
 def load_images(image_urls: list[str]) -> Path:
+    import PIL.Image
+    from smart_open import open
+
     img_path = Path("/img")
 
     img_path.mkdir(parents=True, exist_ok=True)
@@ -99,6 +121,9 @@ class TrainConfig(SharedConfig):
             secrets=[Secret.from_name("my-wandb-secret")] if USE_WANDB else [],)
 
 def train(instance_example_urls):
+    import subprocess
+    from accelerate.utils import write_basic_config
+
     config = TrainConfig()
     #load data locally
     img_path = load_images(instance_example_urls)
@@ -149,7 +174,6 @@ def train(instance_example_urls):
     _exec_subprocess(cmd)                  
     volume.commit()
 
-
 # In order to initialize the model just once on container startup,
 # we use Modal's [container lifecycle](https://modal.com/docs/guide/lifecycle-functions) features, which require the function to be part
 # of a class. Note that the `modal.Volume` we saved the model to is mounted here as well,
@@ -160,6 +184,8 @@ def train(instance_example_urls):
 class Model:
     #enter()
     def load_model(self):
+        import torch
+        from diffusers import AutoencoderKL, DiffusionPipeline
         
         config = TrainConfig()
         volume.reload()
@@ -183,10 +209,17 @@ class AppConfig(SharedConfig):
     num_inference_steps: int = 25
     guidance_scale: float = 7.5
 
-@app.function(  image=image, concurrency_limit=3, mounts =[Mount.from_local_dir(assets_path, remote_path="/assets")],)
+assets_path = Path(__file__).parent / "assets"
+image = image.add_local_dir(assets_path, remote_path="/assets")
+
+#@app.function(  image=image, concurrency_limit=3, mounts =[Volume.from_local_dir(assets_path, remote_path="/assets")],)
+@app.function(  image=image, max_containers=3, )
 
 @asgi_app()
 def fastapi_app():
+    import gradio as gr
+    from gradio.routes import mount_gradio_app
+
     # Call out to the inference in a separate Modal environment with a GPU
     def go(text=""):
         if not text:
@@ -202,12 +235,13 @@ def fastapi_app():
                         f"oil painting of {instance_phrase} flying through space as an astronaut",
                         f"a painting of {instance_phrase} in cyberpunk city. character desing by cory loftis.volumetric light, detailed, rendered in octance",
                         f"drawing of {instance_phrase} high quality, cartoon, path traced, by studio ghibli and don bluth",]
+    
     modal_docs_url = "https://modal.com/docs/guide"
     modal_example_url = f"{modal_docs_url}/examples/dreambooth_app"
     description = f"""Describe what they are doing or how a particular artist or style would depict them. Be fantastical! Try the examples below for inspiration.
 
-    ### Learn how to make a "Dreambooth" for your own pet [here]({modal_example_url}).
-    """
+    ### Learn how to make a "Dreambooth" for your own pet [here]({modal_example_url}) """
+    
     #custom styles: an icon, a background, and theme
     @web_app.get("/favicon.ico", include_in_schema=False)
     async def favicon(): 
@@ -245,7 +279,6 @@ def fastapi_app():
 # Remember, once you've trained your own fine-tuned model, you can deploy it using `modal deploy dreambooth_app.py`.
 #
 # If you just want to try the app out, you can find it at https://modal-labs-example-dreambooth-app-fastapi-app.modal.run
-
 
 
 @app.local_entrypoint()
