@@ -99,6 +99,7 @@ class TrainConfig(SharedConfig):
     # training prompt looks like `{PREFIX} {INSTANCE_NAME} the {CLASS_NAME} {POSTFIX}`
     prefix: str = "a photo of"
     postfix: str = ""
+    instance_name: str = "sks"  # or whatever default you want
 
     # locator for plaintext file with urls for images of target instance
     instance_example_urls_file: str = ( Path(__file__).parent / "instance_example_urls.txt")
