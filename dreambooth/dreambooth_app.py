@@ -170,8 +170,11 @@ def train(instance_example_urls):
                     )
     volume.commit()
 
+RESULTS_DIR = "/results"
+results_volume = modal.Volume.from_name("dreambooth-results-volume", create_if_missing=True)
 
-@app.cls(image=image, gpu="A10G", volumes={MODEL_DIR: volume})
+@app.cls(image=image, gpu="A10G", volumes={MODEL_DIR: volume, RESULTS_DIR: results_volume},
+         secrets=[modal.Secret.from_name("my-wandb-secret")] if USE_WANDB else [])
 class Model:
     @modal.enter()
     def load_model(self):
@@ -189,7 +192,37 @@ class Model:
     
     @modal.method()
     def inference(self, text, config):
-        return self.pipe(  text, num_inference_steps=config.num_inference_steps, guidance_scale=config.guidance_scale,).images[0]
+        import datetime, time, wandb, os
+
+        t1 = time.perf_counter()
+        image =  self.pipe(  text, num_inference_steps=config.num_inference_steps, guidance_scale=config.guidance_scale,).images[0]
+
+        t2 = time.perf_counter()
+        #filename = f"generated_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.png"
+        filename = f"generated_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        filepath = Path(RESULTS_DIR) / filename
+        image.save(filepath)
+
+        results_volume.commit()
+        t3 = time.perf_counter()
+        total_duration = t3 - t1
+        inference_time = t2 - t1
+        print(f"Image saved to {filepath}")
+        print(f" Inference took {inference_time:.3f} sec and total with saving file it took {total_duration:.3f} sec")
+
+        if USE_WANDB :
+            wandb.init(
+                project = os.environ.get("WANDB_PROJECT", "dreambooth_sdxl_app"),
+                job_type = "production-inference",
+                config={ "modal_dir": MODEL_DIR,
+                        "num_inference_steps": config.num_inference_steps,
+                        "guidance_scale": config.guidance_scale},
+                reinit=True # allows creating multiple logs in the same session
+            )
+            wandb.log({ "inference/image": wandb.Image(str(filepath), caption=text),
+                        "inference/prompt": text, "inference/inference_time": inference_time})
+            wandb.finish()
+        return image
         
 web_app = FastAPI()
 assets_path = Path(__file__).parent / "assets" 
@@ -203,7 +236,6 @@ class AppConfig(SharedConfig):
 assets_path = Path(__file__).parent / "assets"
 image = image.add_local_dir(assets_path, remote_path="/assets")
 
-#@app.function(  image=image, concurrency_limit=3, mounts =[Volume.from_local_dir(assets_path, remote_path="/assets")],)
 @app.function(  image=image, max_containers=3, )
 
 @modal.asgi_app()
@@ -215,7 +247,7 @@ def fastapi_app():
     def go(text=""):
         if not text:
             text = example_prompts[0]
-        return Model().inference.remote(text, config)
+        return Model().inference.remote(text, config) #inference.remote here enables the GPU to scale independently than the cpu
 
         #set up AppConfig
     config = AppConfig()
@@ -264,20 +296,8 @@ def fastapi_app():
             for ii, prompt in enumerate(example_prompts):
                 btn = gr.Button(prompt, variant="secondary")
                 btn.click(fn=lambda idx=ii: example_prompts[idx], outputs=inp)
+
     return mount_gradio_app(app=web_app, blocks=interface, path="/")
-
-
-# ## Running your own Dreambooth from the command line
-#
-# You can use the `modal` command-line interface to set up, customize, and deploy this app:
-#
-# - `modal run dreambooth_app.py` will train the model. Change the `instance_example_urls_file` to point to your own pet's images.
-# - `modal serve dreambooth_app.py` will [serve](https://modal.com/docs/guide/webhooks#developing-with-modal-serve) the Gradio interface at a temporary location. Great for iterating on code!
-# - `modal shell dreambooth_app.py` is a convenient helper to open a bash [shell](https://modal.com/docs/guide/developing-debugging#interactive-shell) in our image. Great for debugging environment issues.
-#
-# Remember, once you've trained your own fine-tuned model, you can deploy it using `modal deploy dreambooth_app.py`.
-#
-# If you just want to try the app out, you can find it at https://modal-labs-example-dreambooth-app-fastapi-app.modal.run
 
 
 @app.local_entrypoint()
