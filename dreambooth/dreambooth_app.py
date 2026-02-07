@@ -3,31 +3,33 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import modal
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
-
 import os
+
 os.environ["WANDB_PROJECT"] = "dreambooth_sdxl_app"
 
 # You can read more about how the values in `TrainConfig` are chosen and adjusted [in this blog post on Hugging Face](https://huggingface.co/blog/dreambooth).
 
 app = modal.App( name = "dreambooth-app")
 image = modal.Image.debian_slim(python_version="3.10").uv_pip_install(  
-        #"python-fasthtml",
-        "accelerate==0.27.2",
+        "python-fasthtml",
+        "accelerate==0.31.0",
         "datasets~=2.13.0",
         "ftfy~=6.1.0",
-        "gradio~=3.50.2",
+        "huggingface-hub==0.36.0",
+        "numpy<2",
+        "peft==0.11.1",
+        "pydantic==2.9.2",
+        "sentencepiece>=0.1.91,!=0.1.92",
         "smart_open~=6.4.0",
-        "transformers~=4.38.1",
+        "starlette==0.41.2",
+        "transformers~=4.41.2",
         "torch~=2.2.0",
         "torchvision~=0.16",
         "triton~=2.2.0",
-        "peft==0.7.0",
-        "wandb==0.16.3",
+        "wandb==0.17.6",
 )
                                                                 
-GIT_SHA = ( "abd922bd0c43a504e47eca2ed354c3634bd00834")  # specify the commit to fetch )
+GIT_SHA = "e649678bf55aeaa4b60bd1f68b1ee726278c0304"  # specify the commit to fetch )
 
 image = (image.apt_install("git")
          .run_commands(
@@ -35,10 +37,15 @@ image = (image.apt_install("git")
             "cd /root && git remote add origin https://github.com/huggingface/diffusers",
             f"cd /root && git fetch --depth=1 origin {GIT_SHA} && git checkout {GIT_SHA}",
             # Patch 1: Remove cached_download
-            "sed -i 's/from huggingface_hub import cached_download,/from huggingface_hub import/' /root/src/diffusers/utils/dynamic_modules_utils.py",
+            #"sed -i 's/from huggingface_hub import cached_download,/from huggingface_hub import/' /root/src/diffusers/utils/dynamic_modules_utils.py",
             "cd /root && pip install -e . --no-deps",
          ))
 
+
+# @app.function(secrets=[modal.Secret.from_name("huggingface")])                                                                                  
+# def some_function():                                                                                                                            
+#     os.getenv("HF_TOKEN")
+    
 @dataclass
 class SharedConfig:
     """ Configuration info shared across the project"""
@@ -46,35 +53,34 @@ class SharedConfig:
     instance_name: str = "Qwerty"
     class_name: str = "Golden Retriever"
     
-    #model_name: str = "black-forest-labs/FLUX.1-dev"
+    model_name: str = "black-forest-labs/FLUX.1-dev"
 
-    model_name: str = "stabilityai/stable-diffusion-xl-base-1.0"
-    vae_name: str = "madebyollin/sdxl-vae-fp16-fix"  # required for numerical stability in fp16
+    # model_name: str = "stabilityai/stable-diffusion-xl-base-1.0"
+    # vae_name: str = "madebyollin/sdxl-vae-fp16-fix"  # required for numerical stability in fp16
 
-def download_models():
-    import torch
-    from diffusers import AutoencoderKL, DiffusionPipeline
-    from transformers.utils import move_cache
 
-    config = SharedConfig()
-    DiffusionPipeline.from_pretrained(
-        config.model_name,
-        vae=AutoencoderKL.from_pretrained(
-            config.vae_name, torch_dtype=torch.float16 ),
-        torch_dtype = torch.float16,  )
-    move_cache()
-
-image = image.run_function(download_models)
-
-volume = modal.Volume.from_name( "dreambooth-finetunning-volume", create_if_missing=True)
+volume = modal.Volume.from_name( "dreambooth-finetunning-volume-flux", create_if_missing=True)
 MODEL_DIR = "/model"
 
 #when using flux
-# huggingface_secret = modal.Secret.from_name(
-#     "huggingface-secret", required_keys=["HF_TOKEN"]
-# )
+huggingface_secret = modal.Secret.from_name(
+    "huggingface", required_keys=["HF_TOKEN"]
+)
 
-# image = image.env( {"HF_XNET_HIGH_PERFORMANCE": "1"})
+image = image.env( {"HF_XNET_HIGH_PERFORMANCE": "1"})
+
+@app.function( volumes={MODEL_DIR: volume}, image=image, secrets=[huggingface_secret], timeout=600,) #10 min 
+
+
+def download_models(config):
+    import torch
+    from diffusers import  DiffusionPipeline#,AutoencoderKL,
+    from huggingface_hub import snapshot_download
+
+    snapshot_download( config.model_name, local_dir= MODEL_DIR, ignore_patterns=["*.pt", "*.bin"],)
+
+    DiffusionPipeline.from_pretrained(MODEL_DIR, torch_dtype = torch.bfloat16,  )
+
 
 #load dataset
 def load_images(image_urls: list[str]) -> Path:
@@ -94,6 +100,8 @@ def load_images(image_urls: list[str]) -> Path:
 
 USE_WANDB = True
 
+    
+#image = image.run_function(download_models)
 
 @dataclass
 class TrainConfig(SharedConfig):
@@ -107,20 +115,22 @@ class TrainConfig(SharedConfig):
     instance_example_urls_file: str = ( Path(__file__).parent / "instance_example_urls.txt")
 
     #hyperparameters
-    resolution: int = 1024
-    train_batch_size: int = 4
+    resolution: int = 512
+    train_batch_size: int = 3
+    rank: int = 16
     gradient_accumulation_steps: int = 1
-    learning_rate: float = 1e-4
+    learning_rate: float = 4e-4
     lr_scheduler:str = "constant"
     lr_warmup_steps: int = 0
-    max_train_steps: int = 80
+    max_train_steps: int = 500
     checkpointing_steps: int = 1000
     seed: int = 117
     wandb_project: str = "dreambooth_sdxl_app"
 
-@app.function(image=image, gpu="A100", volumes={MODEL_DIR:volume}, timeout=1800, secrets=[modal.Secret.from_name("my-wandb-secret")] if USE_WANDB else [],)
+@app.function(image=image, gpu="A100-80GB", volumes={MODEL_DIR:volume}, timeout=1800, 
+              secrets=[huggingface_secret]+ ( [modal.Secret.from_name("my-wandb-secret")] if USE_WANDB else []), )
 
-def train(instance_example_urls):
+def train(instance_example_urls, config):
     import subprocess
     from accelerate.utils import write_basic_config
 
@@ -128,7 +138,7 @@ def train(instance_example_urls):
     #load data locally
     img_path = load_images(instance_example_urls)
 
-    write_basic_config(mixed_precision="fp16")
+    write_basic_config(mixed_precision="bf16")
 
     #define training prompt
     instance_phrase = f"{config.instance_name} the {config.class_name}"
@@ -148,10 +158,9 @@ def train(instance_example_urls):
     
     print("launching dreambooth training script")
     _exec_subprocess( [ "accelerate", "launch", 
-                        "examples/dreambooth/train_dreambooth_lora_sdxl.py",
+                        "examples/dreambooth/train_dreambooth_lora_flux.py",
                         "--mixed_precision=fp16",
                         f"--pretrained_model_name_or_path={config.model_name}",
-                        f"--pretrained_vae_model_name_or_path={config.vae_name}",
                         f"--instance_data_dir={img_path}",
                         f"--output_dir={MODEL_DIR}",
                         f"--instance_prompt={prompt}",
@@ -165,8 +174,11 @@ def train(instance_example_urls):
                         f"--checkpointing_steps={config.checkpointing_steps}",
                         f"--seed={config.seed}",]
                     + (
-                        ["--report_to=wandb", f"--validation_prompt={prompt} in space",
-                        f"--validation_epochs={config.max_train_steps // 5}",] if USE_WANDB else []
+                        [
+                            "--report_to=wandb",
+                            #f"--validation_prompt={prompt} in space",
+                            #f"--validation_epochs={config.max_train_steps // 5}",
+                        ] if USE_WANDB else []
                       ),
                     )
     volume.commit()
@@ -174,7 +186,7 @@ def train(instance_example_urls):
 RESULTS_DIR = "/results"
 results_volume = modal.Volume.from_name("dreambooth-results-volume", create_if_missing=True)
 
-@app.cls(image=image, gpu="A10G", volumes={MODEL_DIR: volume, RESULTS_DIR: results_volume},
+@app.cls(image=image, gpu="A100", volumes={MODEL_DIR: volume, RESULTS_DIR: results_volume},
          secrets=[modal.Secret.from_name("my-wandb-secret")] if USE_WANDB else [])
 class Model:
     @modal.enter()
@@ -182,12 +194,9 @@ class Model:
         import torch
         from diffusers import AutoencoderKL, DiffusionPipeline
         
-        config = TrainConfig()
         volume.reload()
 
-        pipe = DiffusionPipeline.from_pretrained(
-            config.model_name,  vae=AutoencoderKL.from_pretrained(config.vae_name, torch_dtype=torch.float16),
-                                torch_dtype=torch.float16,).to("cuda")
+        pipe = DiffusionPipeline.from_pretrained(MODEL_DIR, torch_dtype=torch.bfloat16,).to("cuda")
         pipe.load_lora_weights(MODEL_DIR)
         self.pipe = pipe
     
@@ -232,7 +241,6 @@ web_image = (
     .add_local_dir(assets_path, remote_path="/assets")
 )
 
-
 @dataclass
 class AppConfig(SharedConfig):
     """ Configuration information for inference."""
@@ -242,8 +250,9 @@ class AppConfig(SharedConfig):
 assets_path = Path(__file__).parent / "assets"
 image = image.add_local_dir(assets_path, remote_path="/assets")
 
-@app.function(  image=web_image, max_containers=3, )
+@app.function(  image=web_image, max_containers=1, )
 
+@modal.concurrent(max_inputs=100)
 @modal.asgi_app()
 def fasthtml_app():
     
@@ -272,7 +281,7 @@ def fasthtml_app():
     @fh_app.get("/assets/background.svg")
     async def background(): return FileResponse("/assets/background.svg")
 
-    @fh_app.get("/assets/style.css")
+    @fh_app.get("/assets/styles.css")
     async def styles(): return FileResponse("/assets/styles.css")
 
     @rt("/")
@@ -283,19 +292,20 @@ def fasthtml_app():
                 fh.P( 
                     f"Describe what they are doing or how a particular artist or style would depict them. Be fantastical! Try the examples below for inspiration.",
                     fh.Br(), fh.Br(),
-                    fh.A(f"Learn how to make a 'Dreambooth' for your own pet here.", 
-                         href= modal_example_url, target = "_blank", style="color: var(--primary);"), cls="description" ),
+                    fh.A(f"Learn how to make a 'Dreambooth' Here.", 
+                         href= modal_example_url, target = "_blank", #style="color: var(--primary);"
+                    ), cls="description" ),
                 fh.Div( #input section
                     fh.Div(
-                        fh.Textarea( id="prompt-input", name="prompt", placeholder=f"Describe the version of {instance_phrase} you'd like to see", value=example_prompts[0]),
-                    fh.Div( fh.Button("Dream", hx_post="/generate", hx_target="#output-image", hx_include="#prompt-input", hx_indicator="#output-image", cls="btn"),
-                           fh.A( fh.Button(" Powered by Modal", cls="btn btn-secondary"), href="https://modal.com", target="_blank"), style="margin-top: 1rem;"), cls="input-section"),
+                        fh.Textarea( id="prompt-input", name="prompt", placeholder=f"Describe the version of {instance_phrase} you'd like to see...", value=example_prompts[0]),
+                    fh.Div( fh.Button("✨ Generate Dream", hx_post="/generate", hx_target="#output-image", hx_include="#prompt-input", hx_indicator="#output-image", cls="btn"),
+                           fh.A( fh.Button(" Powered by Modal", cls="btn btn-secondary"), href="https://modal.com", target="_blank"), cls="button-container"), cls="input-section"),
 
                     fh.Div(
                         fh.Div(
-                            fh.P( "Your generated image will appear here", style="text-align: center; opacity:0.5; padding: 3rem;"), id="output-image" ), cls="output-section"), cls="main-content" ),
+                            fh.P( "Your AI-generated masterpiece will appear here ✨", style="text-align: center; color: var(--text-secondary); padding: 3rem;" ), id="output-image" ), cls="output-section"), cls="main-content" ),
             fh.Div( 
-                fh.H3("Examples Prompts"),
+                fh.H3("Example Prompts"),
                 *[ 
                     fh.Button( prompt, 
                             hx_get=f"/set-prompt?prompt={quote(prompt)}", 
@@ -353,70 +363,12 @@ def quote(s):
     return url_quote(s)
                
     
-# @modal.asgi_app()   
-# def fastapi_app():
-#     import gradio as gr
-#     from gradio.routes import mount_gradio_app
-
-#     # Call out to the inference in a separate Modal environment with a GPU
-#     def go(text=""):
-#         if not text:
-#             text = example_prompts[0]
-#         return Model().inference.remote(text, config) #inference.remote here enables the GPU to scale independently than the cpu
-
-#         #set up AppConfig
-#     config = AppConfig()
-
-#     instance_phrase = f"{config.instance_name} the {config.class_name}"
-#     example_prompts = [ f"{instance_phrase}",
-#                         f"a painting of {instance_phrase.title()} With A Pearl Earring, by Vermeer",
-#                         f"oil painting of {instance_phrase} flying through space as an astronaut",
-#                         f"a painting of {instance_phrase} in cyberpunk city. character desing by cory loftis.volumetric light, detailed, rendered in octance",
-#                         f"drawing of {instance_phrase} high quality, cartoon, path traced, by studio ghibli and don bluth",]
-    
-#     modal_docs_url = "https://modal.com/docs/guide"
-#     modal_example_url = f"{modal_docs_url}/examples/dreambooth_app"
-#     description = f"""Describe what they are doing or how a particular artist or style would depict them. Be fantastical! Try the examples below for inspiration.
-
-# ### Learn how to make a "Dreambooth" for your own pet [here]({modal_example_url}).
-#     """
-    
-#     # custom styles: an icon, a background, and a theme
-#     @web_app.get("/favicon.ico", include_in_schema=False)
-#     async def favicon():
-#         return FileResponse("/assets/favicon.svg")
-
-#     @web_app.get("/assets/background.svg", include_in_schema=False)
-#     async def background():
-#         return FileResponse("/assets/background.svg")
-
-#     with open("/assets/index.css") as f:
-#         css = f.read()
-
-#     theme = gr.themes.Default(
-#         primary_hue="green", secondary_hue="emerald", neutral_hue="neutral"
-#     )
-
-#     #add gradio UI around inference
-#     with gr.Blocks( theme = theme, css=css, title ="Pet Dreambooth on Modal") as interface:
-#         gr.Markdown( f"# Dream up images of {instance_phrase}.\n\n{description}",)
-#         with gr.Row():
-#             inp = gr.Textbox ( label="", placeholder=f"Describe the version of {instance_phrase} you'd like to see", lines=10,)
-#             out = gr.Image( height=512, width=512, label="", min_width=512, elem_id="output")
-#         with gr.Row():
-#             btn = gr.Button("Dream", variant="primary", scale=2)
-#             btn.click(  fn=go, inputs=inp, outputs=out) # connect inputs and outputs with inference function
-#             gr.Button(  "⚡️ Powered by Modal", variant ="secondary", link="https://modal.com",)
-#         with gr.Column(variant="compact"):
-#             for ii, prompt in enumerate(example_prompts):
-#                 btn = gr.Button(prompt, variant="secondary")
-#                 btn.click(fn=lambda idx=ii: example_prompts[idx], outputs=inp)
-
-#     return mount_gradio_app(app=web_app, blocks=interface, path="/")
-
-
 @app.local_entrypoint()
-def run():
-    with open(TrainConfig().instance_example_urls_file) as f:
-        instance_example_urls = [line.strip() for line in f.readlines()]
-    train.remote(instance_example_urls)
+def run( max_train_steps: int = 250,):
+    print("loading model")
+    download_models.remote(SharedConfig())
+    print("setting up training")
+    config = TrainConfig(max_train_steps=max_train_steps)
+    instance_example_urls = ( Path(TrainConfig.instance_example_urls_file).read_text().splitlines() )
+    train.remote(instance_example_urls, config)
+    print("traning finished")
