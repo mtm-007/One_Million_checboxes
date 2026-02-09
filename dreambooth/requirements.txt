@@ -1,3 +1,4 @@
 fastapi
 python-fasthtml
 modal
+gradio~=3.50.2

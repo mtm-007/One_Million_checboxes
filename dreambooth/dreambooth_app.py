@@ -4,6 +4,8 @@ from pathlib import Path
 
 import modal
 import os
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
 os.environ["WANDB_PROJECT"] = "dreambooth_sdxl_app"
 
@@ -27,6 +29,7 @@ image = modal.Image.debian_slim(python_version="3.10").uv_pip_install(
         "torchvision~=0.16",
         "triton~=2.2.0",
         "wandb==0.17.6",
+        "gradio~=3.50.2",
 )
                                                                 
 GIT_SHA = "e649678bf55aeaa4b60bd1f68b1ee726278c0304"  # specify the commit to fetch )
@@ -232,14 +235,12 @@ class Model:
             wandb.log({ "inference/image": wandb.Image(str(filepath), caption=text),
                         "inference/prompt": text, "inference/inference_time": inference_time})
             wandb.finish()
-        return image
+        
+        #return image
+        return str(filepath)
 
-assets_path = Path(__file__).parent / "assets"   
-web_image = (
-    modal.Image.debian_slim(python_version="3.10")
-    .pip_install("python-fasthtml")
-    .add_local_dir(assets_path, remote_path="/assets")
-)
+web_app = FastAPI()
+assets_path = Path(__file__).parent / "assets" 
 
 @dataclass
 class AppConfig(SharedConfig):
@@ -247,25 +248,38 @@ class AppConfig(SharedConfig):
     num_inference_steps: int = 25
     guidance_scale: float = 7.5
 
-assets_path = Path(__file__).parent / "assets"
+#assets_path = Path(__file__).parent / "assets"
 image = image.add_local_dir(assets_path, remote_path="/assets")
 
-@app.function(  image=web_image, max_containers=1, )
+@app.function(  image=image, max_containers=3, volumes={RESULTS_DIR: results_volume})
 
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app()
-def fasthtml_app():
-    
-    import fasthtml.common as fh
-    from starlette.responses import FileResponse
+def fastapi_app():
+    import gradio as gr
+    import os
+    from gradio.routes import mount_gradio_app
 
-    fh_app, rt = fh.fast_app(
-        hdrs = ( fh.Link(rel="icon", href="/favicon.ico", type="image/svg+xml"),
-                 fh.Link(rel="stylesheet", href="/assets/styles.css", type="text/css"),))
-    
+    def get_history():
+        results_volume.reload()#sync volume to see new files
+        path = Path(RESULTS_DIR)
+        if not path.exists(): return []
+        #get all pngs, sort by creation time(newest first)
+        imgs = sorted(path.glob("*.png"), key=os.path.getmtime, reverse=True)
+        return [str(img) for img in imgs]
+
+    # Call out to the inference in a separate Modal environment with a GPU
+    def go(text):
+        if not text: text = example_prompts[0]
+        Model().inference.remote(text, config) #inference.remote here enables the GPU to scale independently than the cpu
+        history = get_history()
+        return history[0], history
+
+    #set up AppConfig
     config = AppConfig()
-    instance_phrase = f"{config.instance_name} the {config.class_name}"
+    web_app = FastAPI()
 
+    instance_phrase = f"{config.instance_name} the {config.class_name}"
     example_prompts = [ f"{instance_phrase}",
                         f"a painting of {instance_phrase.title()} With A Pearl Earring, by Vermeer",
                         f"oil painting of {instance_phrase} flying through space as an astronaut",
@@ -274,95 +288,55 @@ def fasthtml_app():
     
     modal_docs_url = "https://modal.com/docs/guide"
     modal_example_url = f"{modal_docs_url}/examples/dreambooth_app"
+    description = f"""Describe what they are doing or how a particular artist or style would depict them. Be fantastical! Try the examples below for inspiration.
 
-    @fh_app.get("/favicon.ico")
-    async def favicon(): return FileResponse("/assets/favicon.svg")
+### Learn how to make a "Dreambooth" for your own pet [here]({modal_example_url}).
+    """
+    
+    # custom styles: an icon, a background, and a theme
+    @web_app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():
+        return FileResponse("/assets/favicon.svg")
 
-    @fh_app.get("/assets/background.svg")
-    async def background(): return FileResponse("/assets/background.svg")
+    @web_app.get("/assets/background.svg", include_in_schema=False)
+    async def background():
+        return FileResponse("/assets/background.svg")
 
-    @fh_app.get("/assets/styles.css")
-    async def styles(): return FileResponse("/assets/styles.css")
+    with open("/assets/index.css") as f:
+        css = f.read()
 
-    @rt("/")
-    def get():
-        return fh.Titled (
-            f"Dreambooth on Modal - {instance_phrase}",
-            fh.Div( fh.H1(f"Dream up images of {instance_phrase}"),
-                fh.P( 
-                    f"Describe what they are doing or how a particular artist or style would depict them. Be fantastical! Try the examples below for inspiration.",
-                    fh.Br(), fh.Br(),
-                    fh.A(f"Learn how to make a 'Dreambooth' Here.", 
-                         href= modal_example_url, target = "_blank", #style="color: var(--primary);"
-                    ), cls="description" ),
-                fh.Div( #input section
-                    fh.Div(
-                        fh.Textarea( id="prompt-input", name="prompt", placeholder=f"Describe the version of {instance_phrase} you'd like to see...", value=example_prompts[0]),
-                    fh.Div( fh.Button("✨ Generate Dream", hx_post="/generate", hx_target="#output-image", hx_include="#prompt-input", hx_indicator="#output-image", cls="btn"),
-                           fh.A( fh.Button(" Powered by Modal", cls="btn btn-secondary"), href="https://modal.com", target="_blank"), cls="button-container"), cls="input-section"),
-
-                    fh.Div(
-                        fh.Div(
-                            fh.P( "Your AI-generated masterpiece will appear here ✨", style="text-align: center; color: var(--text-secondary); padding: 3rem;" ), id="output-image" ), cls="output-section"), cls="main-content" ),
-            fh.Div( 
-                fh.H3("Example Prompts"),
-                *[ 
-                    fh.Button( prompt, 
-                            hx_get=f"/set-prompt?prompt={quote(prompt)}", 
-                            hx_target="#prompt-input", 
-                            hx_swap="outerHTML", 
-                            cls="btn btn-example"
-                    )
-                    for prompt in example_prompts
-                ], 
-                cls="examples"
-            ), 
-            cls="container" 
-        ),
-        #add HTMX
-        fh.Script(src="https://unpkg.com/htmx.org@1.9.10")
+    theme = gr.themes.Default(
+        primary_hue="green", secondary_hue="emerald", neutral_hue="neutral"
     )
-    # Set prompt endpoint
-    @rt("/set-prompt")
-    def get(prompt: str):
-        return fh.Textarea(
-            id="prompt-input",
-            name="prompt",
-            placeholder=f"Describe the version of {instance_phrase} you'd like to see",
-            value=prompt
-        )
-    
-    # Generate endpoint
-    @rt("/generate")
-    async def post(prompt: str):
-        if not prompt:
-            prompt = example_prompts[0]
-        
-        # Show loading state immediately
-        yield fh.Div(
-            fh.Div(cls="spinner"),
-            fh.P("Generating your image...", style="text-align: center;"),
-            cls="loading",
-            id="output-image"
-        )
-        
-        # Call inference
-        img_base64 = Model().inference.remote(prompt, config)
-        
-        # Return generated image
-        yield fh.Div(
-            fh.Img(src=f"data:image/png;base64,{img_base64}", alt=prompt),
-            id="output-image"
-        )
-    
-    return fh_app
 
-# Helper for URL encoding
-def quote(s):
-    from urllib.parse import quote as url_quote
-    return url_quote(s)
-               
-    
+    #add gradio UI around inference
+    with gr.Blocks( theme = theme, css=css, title ="Dreambooth on Modal") as interface:
+        gr.Markdown( f"# Dream up images of {instance_phrase}.\n\n{description}",)
+        with gr.Row():
+            inp = gr.Textbox ( label="", placeholder=f"Describe the version of {instance_phrase} you'd like to see", lines=10,)
+            
+            intial_history = get_history()
+            intial_img = intial_history[0] if intial_history else None
+            out = gr.Image( value = intial_img, height=512, width=512, label="", min_width=512, elem_id="output")
+        with gr.Row():
+            btn = gr.Button("Dream", variant="primary", scale=2)
+            #btn.click(  fn=go, inputs=inp, outputs=out) # connect inputs and outputs with inference function
+            gr.Button(  "⚡️ Powered by Modal", variant ="secondary", link="https://modal.com",)
+        
+        #exmaple prompts
+        with gr.Column(variant="compact"):
+            gr.Markdown('### Try an example prompt:')
+            for prompt in example_prompts:
+                ex_btn = gr.Button(prompt, variant="secondary")
+                ex_btn.click(fn=lambda p=prompt: p, outputs=inp)
+
+        gr.Markdown('### Gallery ')
+        gallery = gr.Gallery(
+            value=intial_history, columns= 4, rows=2, height="auto", allow_preview=True)
+        btn.click(fn=go, inputs=inp, outputs=[out, gallery])
+
+    return mount_gradio_app(app=web_app, blocks=interface, path="/")
+
 @app.local_entrypoint()
 def run( max_train_steps: int = 250,):
     print("loading model")
