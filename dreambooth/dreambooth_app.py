@@ -10,51 +10,24 @@ import fasthtml.common as fh
 os.environ["WANDB_PROJECT"] = "dreambooth_sdxl_app"
 
 app = modal.App( name = "dreambooth-app")
+ 
+image  = modal.Image.debian_slim(python_version="3.10").apt_install("git").uv_pip_install(  
+        "python-fasthtml", "accelerate==0.34.0", "datasets==2.21.0", "ftfy==6.3.1", "huggingface-hub>=0.21.2", "numpy<2", "peft==0.17.0",
+        "pydantic==2.9.2", "sentencepiece==0.2.0", "smart_open==7.0.5", "starlette==0.41.2",
+        "transformers==4.52.3", "torch==2.5.1", "torchvision==0.20.1", "triton>=3.0.0", "wandb==0.17.6", 
+        "diffusers @ git+https://github.com/huggingface/diffusers.git",
+        #"diffusers --upgrade",#"bitsandbytes==0.45.0",
+    )
 
-image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04",
-        add_python="3.10"
-    )
-    .apt_install("git")
-    # Install torch with CUDA wheel + flags
-    .pip_install(
-        "torch==2.5.1",
-        "torchvision==0.20.1",
-        extra_options="--no-cache-dir --index-url https://download.pytorch.org/whl/cu124",force_build=True,
-    )
-    # Add this line to debug during build
-    .run_commands("python -c \"import torch; print('Torch:', torch.__version__, 'CUDA:', torch.version.cuda, 'Available:', torch.cuda.is_available())\"")
-    # Then the rest with uv (or keep using pip if preferred)
-    .uv_pip_install(
-        "python-fasthtml",
-        "accelerate==0.34.0",
-        "datasets==2.21.0",
-        "ftfy==6.3.1",
-        "huggingface-hub>=0.21.2",
-        "numpy<2",
-        "peft==0.17.0",
-        "pydantic==2.9.2",
-        "sentencepiece==0.2.0",
-        "smart_open==7.0.5",
-        "starlette==0.41.2",
-        "transformers==4.52.3",
-        "triton>=3.0.0",
-        "bitsandbytes==0.45.0",
-        "wandb==0.17.6",
-        "git+https://github.com/huggingface/diffusers.git@main",
-    )
-    .env({"HF_XNET_HIGH_PERFORMANCE": "1"})
-)
+# GIT_SHA = "bedc67c75fe36dbe5c20b55f15b87bcbbe513d8d"  # specify the commit to fetch )
 
-# image = modal.Image.from_registry("nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04", add_python="3.10").apt_install("git").uv_pip_install(  
-#         "python-fasthtml", "accelerate==0.34.0", "datasets==2.21.0", "ftfy==6.3.1", "huggingface-hub>=0.21.2", "numpy<2", "peft==0.17.0",
-#         "pydantic==2.9.2", "sentencepiece==0.2.0", "smart_open==7.0.5", "starlette==0.41.2",
-#         "transformers==4.52.3", "torch==2.5.1", "torchvision==0.20.1", "triton>=3.0.0", "bitsandbytes==0.45.0", "wandb==0.17.6",#"diffusers>=0.33.0",
-#         "git+https://github.com/huggingface/diffusers.git@main", #"git+https://github.com/huggingface/diffusers.git@flux2-klein",
-#         #"git+https://github.com/huggingface/diffusers.git@5bf248ddd8796b4f4958559429071a28f9b2dd3a",  # or find a Jan 16-25 2026 commit from history
-#     )
-                                                                    
+# image = (image.apt_install("git")
+#          .run_commands(
+#             "cd /root && git init .",
+#             "cd /root && git remote add origin https://github.com/huggingface/diffusers",
+#             f"cd /root && git fetch --depth=1 origin {GIT_SHA} && git checkout {GIT_SHA}",
+#             "cd /root && pip install -e . --no-deps", ))
+
 @dataclass
 class SharedConfig:
     """ Configuration info shared across the project"""
@@ -114,10 +87,14 @@ def download_models(config):
     from huggingface_hub import snapshot_download
 
     snapshot_download( config.model_name, local_dir= MODEL_DIR, ignore_patterns=["*.pt", "*.bin"],)
-    transformer = FluxTransformer2DModel.from_pretrained(
-        MODEL_DIR, subfolder="transformer",torch_dtype=torch.bfloat16, ignore_mismatched_sizes=True, low_cpu_mem_usage=False,)
-    pipe = Flux2KleinPipeline.from_pretrained( MODEL_DIR, transformer=transformer, torch_dtype=torch.bfloat16,)
-    pipe.to("cuda")
+    
+    # transformer = FluxTransformer2DModel.from_pretrained(
+    #     MODEL_DIR, subfolder="transformer",torch_dtype=torch.bfloat16, ignore_mismatched_sizes=True, low_cpu_mem_usage=False,)
+    
+    pipe = Flux2KleinPipeline.from_pretrained( 
+        MODEL_DIR, torch_dtype=torch.bfloat16, ignore_mismatched_sizes=True, low_cpu_mem_usage=False,)
+
+    #pipe.to("cuda")
     print("Torch version:", torch.__version__)
     print("Is CUDA available at startup:", torch.cuda.is_available())
     print("Base pipeline loaded successfully")
@@ -171,7 +148,7 @@ def train(instance_example_urls, config):
     
     print("launching dreambooth training script")
     _exec_subprocess( [ "accelerate", "launch", 
-                        "examples/dreambooth/train_dreambooth_lora_flux.py",
+                        #"examples/dreambooth/train_dreambooth_lora_flux.py",
                         "--mixed_precision=fp16",
                         f"--pretrained_model_name_or_path={config.model_name}",
                         f"--instance_data_dir={img_path}",
@@ -207,11 +184,11 @@ class Model:
         
         volume.reload()
 
-        transformer = FluxTransformer2DModel.from_pretrained(
-            MODEL_DIR, subfolder="transformer", torch_dtype=torch.bfloat16, ignore_mismatched_sizes=True, low_cpu_mem_usage=False,)
+        # transformer = FluxTransformer2DModel.from_pretrained(
+        #     MODEL_DIR, subfolder="transformer", torch_dtype=torch.bfloat16, ignore_mismatched_sizes=True, low_cpu_mem_usage=False,)
         
         pipe = Flux2KleinPipeline.from_pretrained(
-            MODEL_DIR, transformer=transformer, torch_dtype=torch.bfloat16,).to("cuda")
+            MODEL_DIR, torch_dtype=torch.bfloat16,ignore_mismatched_sizes=True, low_cpu_mem_usage=False,).to("cuda")
         
         pipe.enable_model_cpu_offload()
         pipe.load_lora_weights(MODEL_DIR)
