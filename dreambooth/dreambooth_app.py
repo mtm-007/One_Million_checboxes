@@ -262,6 +262,13 @@ def fasthtml_app():
 
     instance_phrase = f"{config.instance_name} the {config.class_name}"
 
+    example_prompts = [ f"{instance_phrase}",
+                        f"a painting of {instance_phrase.title()} With A Pearl Earring, by Vermeer",
+                        f"oil painting of {instance_phrase} flying through space as an astronaut",
+                        f"a painting of {instance_phrase} in cyberpunk city. character design by cory loftis. volumetric light, detailed, rendered in octane",
+                        f"drawing of {instance_phrase} high quality, cartoon, path traced, by studio ghibli and don bluth",
+                    ]
+
     def get_history():
         results_volume.reload()
         path = Path(RESULTS_DIR)
@@ -283,11 +290,17 @@ def fasthtml_app():
             ),
             fh.Body(
                 fh.Main(
-                    fh.H1(f"Dream up images of {instance_phrase}"),
+                    fh.H1(f"Dream up and Generate Images with Flux "),
                     fh.P("Describe what they are doing, styles, artist, etc."),
                     fh.Form(
-                        fh.Textarea(name="prompt", palceholder=f"Describe {instance_phrase}", rows=6, cls="prompt-box",),
+                        fh.Textarea(name="prompt", palceholder=f"Describe {instance_phrase}", rows=6, cls="prompt-box", id="prompt-input"),
                         fh.Button("Dream", type="submit"), method="post", action="/generate",),
+                    fh.Div(fh.H3("Try an example: "),
+                           *[
+                               fh.Button( prompt, cls="example-btn", onclick=f"document.getElementById('prompt-input').value = `{prompt}`")
+                               for prompt in example_prompts
+                           ], cls="examples" 
+                    ),
 
                     fh.H2("Lastet result"), fh.Img(src=f"/image/{latest.name}") if latest else fh.P("No images yet"),
                     fh.H2("Gallery"), fh.Div( *[ fh.Img(src=f"/image/{img.name}", cls="thumb") for img in history[:]], cls="gallery",

@@ -1,207 +1,189 @@
-/* -----------------------------
-   Base reset & theme
------------------------------- */
+/* Dreambooth FastHTML App Styles */
 
-:root {
-    --bg: #0f172a;            /* slate-900 */
-    --panel: #020617;         /* slate-950 */
-    --text: #e5e7eb;          /* gray-200 */
-    --muted: #94a3b8;         /* slate-400 */
-    --accent: #10b981;        /* emerald-500 */
-    --accent-hover: #059669;  /* emerald-600 */
-    --border: #1e293b;        /* slate-800 */
-  }
-  
-  * {
-    box-sizing: border-box;
-  }
-  
-  html, body {
+* {
     margin: 0;
     padding: 0;
-    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont;
-    background: radial-gradient(
-        1200px 600px at 50% -200px,
-        rgba(16, 185, 129, 0.15),
-        transparent 40%
-      ),
-      var(--bg);
-    color: var(--text);
-  }
-  
-  /* -----------------------------
-     Layout
-  ------------------------------ */
-  
-  body {
-    display: flex;
-    justify-content: center;
-  }
-  
-  main {
-    width: 100%;
-    max-width: 1100px;
-    padding: 2rem 1.5rem 4rem;
-  }
-  
-  /* -----------------------------
-     Headings & text
-  ------------------------------ */
-  
-  h1 {
-    font-size: 2.25rem;
-    margin-bottom: 0.75rem;
-  }
-  
-  h2 {
-    margin-top: 2.5rem;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    color: #2d3748;
+}
+
+h1 {
+    font-size: 2.5rem;
+    color: white;
     margin-bottom: 1rem;
-  }
-  
-  p {
-    color: var(--muted);
-    max-width: 800px;
-    line-height: 1.6;
-  }
-  
-  /* -----------------------------
-     Prompt box
-  ------------------------------ */
-  
-  form {
-    margin-top: 1.5rem;
-  }
-  
-  textarea {
-    width: 100%;
-    min-height: 160px;
-    resize: vertical;
-    padding: 1rem;
-    font-size: 1rem;
-    border-radius: 12px;
-    background: var(--panel);
-    color: var(--text);
-    border: 1px solid var(--border);
-    outline: none;
-  }
-  
-  textarea:focus {
-    border-color: var(--accent);
-  }
-  
-  /* -----------------------------
-     Buttons
-  ------------------------------ */
-  
-  button {
-    margin-top: 1rem;
-    padding: 0.75rem 1.5rem;
-    font-size: 1rem;
-    font-weight: 600;
-    border-radius: 999px;
-    border: none;
-    background: var(--accent);
-    color: #022c22;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-  
-  button:hover {
-    background: var(--accent-hover);
-    transform: translateY(-1px);
-  }
-  
-  button.secondary {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
-  }
-  
-  button.secondary:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-  
-  /* -----------------------------
-     Image output
-  ------------------------------ */
-  
-  .output {
+    text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+h2 {
+    font-size: 1.5rem;
     margin-top: 2rem;
-    display: flex;
-    justify-content: center;
-  }
-  
-  .output img {
-    width: 512px;
-    height: 512px;
-    border-radius: 16px;
-    border: 1px solid var(--border);
-    background: #000;
-  }
-  
-  /* -----------------------------
-     Gallery
-  ------------------------------ */
-  
-  .gallery {
+    margin-bottom: 1rem;
+    color: white;
+}
+
+p {
+    font-size: 1.1rem;
+    color: rgba(255,255,255,0.9);
+    margin-bottom: 2rem;
+    line-height: 1.6;
+}
+
+/* Form Styles */
+form {
+    background: white;
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    margin-bottom: 2rem;
+}
+
+.prompt-box {
+    width: 100%;
+    padding: 1rem;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-family: inherit;
+    resize: vertical;
+    margin-bottom: 1rem;
+    transition: border-color 0.2s;
+}
+
+.prompt-box:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+button[type="submit"] {
+    width: 100%;
+    padding: 1rem 2rem;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+button[type="submit"]:hover {
+    background: #5568d3;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+button[type="submit"]:active {
+    transform: translateY(0);
+}
+
+/* Image Display */
+img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+img[src*="/image/"] {
+    display: block;
+    margin: 0 auto;
+    background: white;
+    padding: 1rem;
+}
+
+/* Gallery */
+.gallery {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 1rem;
     margin-top: 1rem;
-  }
-  
-  .gallery img {
+}
+
+.thumb {
     width: 100%;
-    aspect-ratio: 1 / 1;
+    height: 200px;
     object-fit: cover;
-    border-radius: 12px;
-    border: 1px solid var(--border);
     cursor: pointer;
-    transition: transform 0.15s ease, border-color 0.15s ease;
-  }
-  
-  .gallery img:hover {
-    transform: scale(1.02);
-    border-color: var(--accent);
-  }
-  
-  /* -----------------------------
-     Example prompt buttons
-  ------------------------------ */
-  
-  .examples {
-    margin-top: 2rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-  }
-  
-  .examples form {
-    margin: 0;
-  }
-  
-  .examples button {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-size: 0.9rem;
-    padding: 0.5rem 1rem;
-  }
-  
-  .examples button:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-  
-  /* -----------------------------
-     Footer / branding
-  ------------------------------ */
-  
-  .footer {
-    margin-top: 3rem;
-    text-align: center;
-    color: var(--muted);
-    font-size: 0.9rem;
-  }
-  
+    transition: transform 0.2s, box-shadow 0.2s;
+    background: white;
+    padding: 0.5rem;
+}
+
+.thumb:hover {
+    transform: scale(1.05);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    body {
+        padding: 1rem;
+    }
+    
+    h1 {
+        font-size: 2rem;
+    }
+    
+    form {
+        padding: 1.5rem;
+    }
+    
+    .gallery {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    }
+    
+    .thumb {
+        height: 150px;
+    }
+}
+
+/* Example prompts section */
+.examples {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 12px;
+    margin: 2rem 0;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.examples h3 {
+    color: #2d3748;
+    font-size: 1.2rem;
+    margin-bottom: 1rem;
+}
+
+.example-btn {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    background: #f7fafc;
+    color: #2d3748;
+    border: 2px solid #e2e8f0;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 0.95rem;
+}
+
+.example-btn:hover {
+    background: #edf2f7;
+    border-color: #667eea;
+    transform: translateX(4px);
+}
+
+.example-btn:last-child {
+    margin-bottom: 0;
+}
