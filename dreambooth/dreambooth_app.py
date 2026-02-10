@@ -4,34 +4,17 @@ from pathlib import Path
 
 import modal
 import os
-# from fastapi import FastAPI
-# from fastapi.responses import FileResponse
 
 import fasthtml.common as fh
 
 os.environ["WANDB_PROJECT"] = "dreambooth_sdxl_app"
 
-# You can read more about how the values in `TrainConfig` are chosen and adjusted [in this blog post on Hugging Face](https://huggingface.co/blog/dreambooth).
-
 app = modal.App( name = "dreambooth-app")
+
 image = modal.Image.debian_slim(python_version="3.10").uv_pip_install(  
-        "python-fasthtml",
-        "accelerate==0.31.0",
-        "datasets~=2.13.0",
-        "ftfy~=6.1.0",
-        "huggingface-hub==0.36.0",
-        "numpy<2",
-        "peft==0.11.1",
-        "pydantic==2.9.2",
-        "sentencepiece>=0.1.91,!=0.1.92",
-        "smart_open~=6.4.0",
-        "starlette==0.41.2",
-        "transformers~=4.41.2",
-        "torch~=2.2.0",
-        "torchvision~=0.16",
-        "triton~=2.2.0",
-        "wandb==0.17.6",
-        "gradio~=3.50.2",
+        "python-fasthtml", "accelerate==0.31.0", "datasets~=2.13.0", "ftfy~=6.1.0", "huggingface-hub==0.36.0", "numpy<2", "peft==0.11.1",
+        "pydantic==2.9.2", "sentencepiece>=0.1.91,!=0.1.92", "smart_open~=6.4.0", "starlette==0.41.2",
+        "transformers~=4.41.2", "torch~=2.2.0", "torchvision~=0.16", "triton~=2.2.0", "bitsandbytes", "wandb==0.17.6",
 )
                                                                 
 GIT_SHA = "e649678bf55aeaa4b60bd1f68b1ee726278c0304"  # specify the commit to fetch )
@@ -46,10 +29,6 @@ image = (image.apt_install("git")
             "cd /root && pip install -e . --no-deps",
          ))
 
-
-# @app.function(secrets=[modal.Secret.from_name("huggingface")])                                                                                  
-# def some_function():                                                                                                                            
-#     os.getenv("HF_TOKEN")
     
 @dataclass
 class SharedConfig:
@@ -57,56 +36,7 @@ class SharedConfig:
     # The instance name is the "proper noun" we're teaching the model
     instance_name: str = "Qwerty"
     class_name: str = "Golden Retriever"
-    
     model_name: str = "black-forest-labs/FLUX.1-dev"
-
-    # model_name: str = "stabilityai/stable-diffusion-xl-base-1.0"
-    # vae_name: str = "madebyollin/sdxl-vae-fp16-fix"  # required for numerical stability in fp16
-
-
-volume = modal.Volume.from_name( "dreambooth-finetunning-volume-flux", create_if_missing=True)
-MODEL_DIR = "/model"
-
-#when using flux
-huggingface_secret = modal.Secret.from_name(
-    "huggingface", required_keys=["HF_TOKEN"]
-)
-
-image = image.env( {"HF_XNET_HIGH_PERFORMANCE": "1"})
-
-@app.function( volumes={MODEL_DIR: volume}, image=image, secrets=[huggingface_secret], timeout=600,) #10 min 
-
-
-def download_models(config):
-    import torch
-    from diffusers import  DiffusionPipeline#,AutoencoderKL,
-    from huggingface_hub import snapshot_download
-
-    snapshot_download( config.model_name, local_dir= MODEL_DIR, ignore_patterns=["*.pt", "*.bin"],)
-
-    DiffusionPipeline.from_pretrained(MODEL_DIR, torch_dtype = torch.bfloat16,  )
-
-
-#load dataset
-def load_images(image_urls: list[str]) -> Path:
-    import PIL.Image
-    from smart_open import open
-
-    img_path = Path("/img")
-
-    img_path.mkdir(parents=True, exist_ok=True)
-    for ii, url in enumerate(image_urls):
-        with open(url, "rb") as f:
-            image = PIL.Image.open(f)
-            image.save(img_path / f"{ii}.png")
-    print(f"{ii + 1} images loaded")
-
-    return img_path
-
-USE_WANDB = True
-
-    
-#image = image.run_function(download_models)
 
 @dataclass
 class TrainConfig(SharedConfig):
@@ -121,29 +51,80 @@ class TrainConfig(SharedConfig):
 
     #hyperparameters
     resolution: int = 512
-    train_batch_size: int = 3
-    rank: int = 16
-    gradient_accumulation_steps: int = 1
-    learning_rate: float = 4e-4
+    train_batch_size: int = 1
+    rank: int = 8
+    gradient_accumulation_steps: int = 6
+    learning_rate: float = 5e-4
     lr_scheduler:str = "constant"
     lr_warmup_steps: int = 0
     max_train_steps: int = 500
-    checkpointing_steps: int = 1000
+    checkpointing_steps: int = 100
     seed: int = 117
+    resume_from_checkpointing: str = "latest"
     wandb_project: str = "dreambooth_sdxl_app"
 
-@app.function(image=image, gpu="A100-80GB", volumes={MODEL_DIR:volume}, timeout=1800, 
+@dataclass
+class AppConfig(SharedConfig):
+    """ Configuration information for inference."""
+    num_inference_steps: int = 25
+    guidance_scale: float = 7.5
+
+
+volume = modal.Volume.from_name( "dreambooth-finetunning-volume-flux", create_if_missing=True)
+results_volume = modal.Volume.from_name("dreambooth-results-volume", create_if_missing=True)
+RESULTS_DIR = "/results"
+MODEL_DIR = "/model"
+
+USE_WANDB = True
+
+#when using flux
+huggingface_secret = modal.Secret.from_name( "huggingface", required_keys=["HF_TOKEN"])
+image = image.env( {"HF_XNET_HIGH_PERFORMANCE": "1", "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",})
+
+@app.function( volumes={MODEL_DIR: volume}, image=image, secrets=[huggingface_secret], timeout=600,) #10 min 
+
+def download_models(config):
+    import torch
+    from diffusers import  DiffusionPipeline#,AutoencoderKL,
+    from huggingface_hub import snapshot_download
+
+    snapshot_download( config.model_name, local_dir= MODEL_DIR, ignore_patterns=["*.pt", "*.bin"],)
+    DiffusionPipeline.from_pretrained(MODEL_DIR, torch_dtype = torch.bfloat16,  )
+
+def load_images(image_urls: list[str]) -> Path:
+    import PIL.Image
+    from smart_open import open
+
+    img_path = Path("/img")
+    img_path.mkdir(parents=True, exist_ok=True)
+
+    for ii, url in enumerate(image_urls):
+        with open(url, "rb") as f:
+            image = PIL.Image.open(f)
+            image.save(img_path / f"{ii}.png")
+    print(f"{ii + 1} images loaded")
+    return img_path
+
+@app.function(image=image, gpu="L40S", volumes={MODEL_DIR:volume}, timeout=1800, 
               secrets=[huggingface_secret]+ ( [modal.Secret.from_name("my-wandb-secret")] if USE_WANDB else []), )
 
 def train(instance_example_urls, config):
-    import subprocess
+    import subprocess, torch
     from accelerate.utils import write_basic_config
 
+    # Print GPU memory before training
+    if torch.cuda.is_available():
+        print(f"GPU Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+        print(f"GPU Memory reserved: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
+    
     config = TrainConfig()
-    #load data locally
     img_path = load_images(instance_example_urls)
-
+    
     write_basic_config(mixed_precision="bf16")
+
+    # Check for existing checkpoints
+    checkpoint_dir = Path(MODEL_DIR) / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     #define training prompt
     instance_phrase = f"{config.instance_name} the {config.class_name}"
@@ -164,7 +145,15 @@ def train(instance_example_urls, config):
     print("launching dreambooth training script")
     _exec_subprocess( [ "accelerate", "launch", 
                         "examples/dreambooth/train_dreambooth_lora_flux.py",
-                        "--mixed_precision=fp16",
+                        "--mixed_precision=bf16",
+                        "--gradient_checkpointing",
+                        "--use_8bit_adam",  # Add this flag
+                        # Add these memory-saving flags:
+                        "--set_grads_to_none",
+                        #"--rank=8", 
+                        "--enable_xformers_memory_efficient_attention",  # Use xformers
+                        f"--resume_from_checkpoint={config.resume_from_checkpoint}",
+
                         f"--pretrained_model_name_or_path={config.model_name}",
                         f"--instance_data_dir={img_path}",
                         f"--output_dir={MODEL_DIR}",
@@ -177,6 +166,8 @@ def train(instance_example_urls, config):
                         f"--lr_warmup_steps={config.lr_warmup_steps}",
                         f"--max_train_steps={config.max_train_steps}",
                         f"--checkpointing_steps={config.checkpointing_steps}",
+                        # LoRA rank
+                        f"--rank={config.rank}",
                         f"--seed={config.seed}",]
                     + (
                         [
@@ -188,11 +179,9 @@ def train(instance_example_urls, config):
                     )
     volume.commit()
 
-RESULTS_DIR = "/results"
-results_volume = modal.Volume.from_name("dreambooth-results-volume", create_if_missing=True)
-
-@app.cls(image=image, gpu="A100", volumes={MODEL_DIR: volume, RESULTS_DIR: results_volume},
+@app.cls(image=image, gpu="L40S", volumes={MODEL_DIR: volume, RESULTS_DIR: results_volume},
          secrets=[modal.Secret.from_name("my-wandb-secret")] if USE_WANDB else [])
+
 class Model:
     @modal.enter()
     def load_model(self):
@@ -213,7 +202,6 @@ class Model:
         image =  self.pipe(  text, num_inference_steps=config.num_inference_steps, guidance_scale=config.guidance_scale,).images[0]
 
         t2 = time.perf_counter()
-        #filename = f"generated_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.png"
         filename = f"generated_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         filepath = Path(RESULTS_DIR) / filename
         image.save(filepath)
@@ -236,102 +224,8 @@ class Model:
             )
             wandb.log({ "inference/image": wandb.Image(str(filepath), caption=text),
                         "inference/prompt": text, "inference/inference_time": inference_time})
-            wandb.finish()
-        
-        #return image
+            wandb.finish()      
         return str(filepath)
-
-
-#web_app = FastAPI()
-
-@dataclass
-class AppConfig(SharedConfig):
-    """ Configuration information for inference."""
-    num_inference_steps: int = 25
-    guidance_scale: float = 7.5
-
-assets_path = Path(__file__).parent / "assets"
-image = image.add_local_dir(assets_path, remote_path="/assets")
-
-@app.function(  image=image, max_containers=3, volumes={RESULTS_DIR: results_volume})
-
-@modal.concurrent(max_inputs=100)
-@modal.asgi_app()
-def fasthtml_app():
-    config = AppConfig()
-
-    instance_phrase = f"{config.instance_name} the {config.class_name}"
-
-    example_prompts = [ f"{instance_phrase}",
-                        f"a painting of {instance_phrase.title()} With A Pearl Earring, by Vermeer",
-                        f"oil painting of {instance_phrase} flying through space as an astronaut",
-                        f"a painting of {instance_phrase} in cyberpunk city. character design by cory loftis. volumetric light, detailed, rendered in octane",
-                        f"drawing of {instance_phrase} high quality, cartoon, path traced, by studio ghibli and don bluth",
-                    ]
-
-    def get_history():
-        results_volume.reload()
-        path = Path(RESULTS_DIR)
-        if not path.exists(): return []
-        imgs = sorted( path.glob("*.png"), key=os.path.getmtime, reverse=True)
-        return [Path(img) for img in imgs]
-
-    app = fh.FastHTML()
-
-    @app.get("/")
-    def index():
-        history = get_history()
-        latest = history[0] if history else None
-
-        return fh.Html(
-            fh.Head(
-                fh.Title("Dreambooth on Modal"),
-                fh.Link(rel="stylesheet", href="/assets/styles.css?v=2"),
-            ),
-            fh.Body(
-                fh.Main(
-                    fh.H1(f"Dream up and Generate Images with Flux "),
-                    fh.P("Describe what they are doing, styles, artist, etc."),
-                    fh.Form(
-                        fh.Textarea(name="prompt", palceholder=f"Describe {instance_phrase}", rows=6, cls="prompt-box", id="prompt-input"),
-                        fh.Button("Dream", type="submit"), method="post", action="/generate",),
-                    fh.Div(fh.H3("Try an example: "),
-                           *[
-                               fh.Button( prompt, cls="example-btn", onclick=f"document.getElementById('prompt-input').value = `{prompt}`")
-                               for prompt in example_prompts
-                           ], cls="examples" 
-                    ),
-
-                    fh.H2("Lastet result"), fh.Img(src=f"/image/{latest.name}") if latest else fh.P("No images yet"),
-                    fh.H2("Gallery"), fh.Div( *[ fh.Img(src=f"/image/{img.name}", cls="thumb") for img in history[:]], cls="gallery",
-                        ),
-                ),
-            )
-        )
-
-    @app.post("/generate")
-    def generate(prompt: str = ""):
-        if not prompt: prompt = f"{instance_phrase}"
-
-        Model().inference.remote(prompt, config)
-        return fh.Redirect("/") 
-    
-    @app.get("/image/{name}")
-    def serve_image(name: str):
-        return fh.FileResponse(Path(RESULTS_DIR) / name)
-
-    @app.get("/assets/{filename}")
-    def serve_asset(filename: str):
-        from starlette.responses import FileResponse
-
-        response = fh.FileResponse(Path("/assets") / filename)
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Exipires"] = "0"
-        return response
-    
-    return app
-
 
 @app.local_entrypoint()
 def run( max_train_steps: int = 250,):

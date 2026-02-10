@@ -1,4 +1,4 @@
-fastapi
+#fastapi
 python-fasthtml
 modal
-gradio~=3.50.2
+#gradio~=3.50.2
