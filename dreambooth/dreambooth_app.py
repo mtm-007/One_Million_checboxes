@@ -11,23 +11,22 @@ os.environ["WANDB_PROJECT"] = "dreambooth_sdxl_app"
 
 app = modal.App( name = "dreambooth-app")
  
-image  = modal.Image.debian_slim(python_version="3.10").apt_install("git").uv_pip_install(  
-        "python-fasthtml", "diffusers"," accelerate==0.34.0", "datasets==2.21.0", "ftfy==6.3.1", "huggingface-hub>=0.21.2", "numpy<2", "peft==0.17.0",
-        "pydantic==2.9.2", "sentencepiece==0.2.0", "smart_open==7.0.5", "starlette==0.41.2",
-        "transformers==4.52.3", "torch==2.5.1", "torchvision==0.20.1", "triton>=3.0.0", "wandb==0.17.6", 
-        #"diffusers @ git+https://github.com/huggingface/diffusers.git",
-        #"diffusers --upgrade",#"bitsandbytes==0.45.0",
-    )
-# .run_commands("pip install git+https://github.com/huggingface/diffusers.git")
+image = modal.Image.debian_slim(python_version="3.10").uv_pip_install(  
+    "python-fasthtml", "accelerate==0.34.0", "datasets==2.21.0", "ftfy==6.3.1", 
+    "huggingface-hub>=0.21.2", "numpy<2", "peft==0.17.0",
+    "pydantic==2.9.2", "sentencepiece==0.2.0", "smart_open==7.0.5", "starlette==0.41.2",
+    "transformers==4.52.3", "torch==2.5.1", "torchvision==0.20.1", "triton>=3.0.0", 
+    "wandb==0.17.6",
+)
 
-# GIT_SHA = "bedc67c75fe36dbe5c20b55f15b87bcbbe513d8d"  # specify the commit to fetch )
+GIT_SHA = "61f175660a8ac54f1470a74a810e6c38fb4795d5"  # specify the commit to fetch )
 
-# image = (image.apt_install("git")
-#          .run_commands(
-#             "cd /root && git init .",
-#             "cd /root && git remote add origin https://github.com/huggingface/diffusers",
-#             f"cd /root && git fetch --depth=1 origin {GIT_SHA} && git checkout {GIT_SHA}",
-#             "cd /root && pip install -e . --no-deps", ))
+image = (image.apt_install("git")
+         .run_commands(
+            "cd /root && git init .",
+            "cd /root && git remote add origin https://github.com/huggingface/diffusers",
+            f"cd /root && git fetch --depth=1 origin {GIT_SHA} && git checkout {GIT_SHA}",
+            "cd /root && pip install -e . --no-deps", ))
 
 @dataclass
 class SharedConfig:
@@ -50,9 +49,9 @@ class TrainConfig(SharedConfig):
 
     #hyperparameters
     resolution: int = 512
-    train_batch_size: int = 3
+    train_batch_size: int = 1
     rank: int = 16
-    gradient_accumulation_steps: int = 1
+    gradient_accumulation_steps: int = 3
     learning_rate: float = 4e-4
     lr_scheduler:str = "constant"
     lr_warmup_steps: int = 0
@@ -83,21 +82,42 @@ image = image.env( {"HF_XNET_HIGH_PERFORMANCE": "1",})# "PYTORCH_CUDA_ALLOC_CONF
 
 def download_models(config):
     import torch
-    from diffusers import Flux2Pipeline#,Flux2KleinPipeline,FluxTransformer2DModel,
+    import json
+    from pathlib import Path
+    from diffusers import Flux2KleinPipeline
     from huggingface_hub import snapshot_download
 
-    snapshot_download( config.model_name, local_dir= MODEL_DIR, ignore_patterns=["*.pt", "*.bin"],)
+    print(f"Downloading model: {config.model_name}")
     
-    # transformer = FluxTransformer2DModel.from_pretrained(
-    #     MODEL_DIR, subfolder="transformer",torch_dtype=torch.bfloat16, ignore_mismatched_sizes=True, low_cpu_mem_usage=False,)
+    snapshot_download(
+        config.model_name, 
+        local_dir=MODEL_DIR, 
+        ignore_patterns=["*.pt", "*.bin"],
+    )
     
-    pipe = Flux2Pipeline.from_pretrained( 
-        MODEL_DIR, torch_dtype=torch.bfloat16, ignore_mismatched_sizes=True, low_cpu_mem_usage=False,)
+    # Modify the transformer config to match checkpoint dimensions
+    config_path = Path(MODEL_DIR) / "transformer" / "config.json"
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            transformer_config = json.load(f)
+        
+        # Update to match checkpoint dimensions
+        transformer_config['joint_attention_dim'] = 4096  # Instead of 7680
+        transformer_config['in_channels'] = 64  # Instead of 128
+        transformer_config['out_channels'] = 64  # Instead of 128
+        
+        with open(config_path, 'w') as f:
+            json.dump(transformer_config, f, indent=2)
+        
+        print("✓ Transformer config updated to match checkpoint")
+    
+    print("Loading pipeline...")
+    pipe = Flux2KleinPipeline.from_pretrained(
+        MODEL_DIR,
+        torch_dtype=torch.bfloat16,
+    )
 
-    #pipe.to("cuda")
-    print("Torch version:", torch.__version__)
-    print("Is CUDA available at startup:", torch.cuda.is_available())
-    print("Base pipeline loaded successfully")
+    print("✓ Pipeline loaded successfully")
 
 def load_images(image_urls: list[str]) -> Path:
     import PIL.Image
@@ -113,7 +133,7 @@ def load_images(image_urls: list[str]) -> Path:
     print(f"{ii + 1} images loaded")
     return img_path
 
-@app.function(image=image, gpu="L4", volumes={MODEL_DIR:volume}, timeout=1800, 
+@app.function(image=image, gpu="A100-40GB", volumes={MODEL_DIR:volume}, timeout=1800, 
               secrets=[huggingface_secret]+ ( [modal.Secret.from_name("my-wandb-secret")] if USE_WANDB else []), )
 
 def train(instance_example_urls, config):
@@ -148,7 +168,7 @@ def train(instance_example_urls, config):
     
     print("launching dreambooth training script")
     _exec_subprocess( [ "accelerate", "launch", 
-                        #"examples/dreambooth/train_dreambooth_lora_flux.py",
+                        "examples/dreambooth/train_dreambooth_lora_flux2_klein.py",
                         "--mixed_precision=fp16",
                         f"--pretrained_model_name_or_path={config.model_name}",
                         f"--instance_data_dir={img_path}",
@@ -173,27 +193,77 @@ def train(instance_example_urls, config):
                     )
     volume.commit()
 
-@app.cls(image=image, gpu="L4", volumes={MODEL_DIR: volume, RESULTS_DIR: results_volume},
+@app.cls(image=image, gpu="A100-40GB", volumes={MODEL_DIR: volume, RESULTS_DIR: results_volume},
          secrets=[modal.Secret.from_name("my-wandb-secret")] if USE_WANDB else [])
 
 class Model:
     @modal.enter()
+    # def load_model(self):
+    #     import torch
+    #     from diffusers import Flux2KleinPipeline, FluxTransformer2DModel
+    #     from safetensors.torch import load_file
+        
+    #     volume.reload()
+    #     print("Creating tranformer with custom config...")
+    #     transformer = FluxTransformer2DModel(
+    #         in_channels=64,
+    #         joint_attention_dim=4096,
+    #         num_attention_heads=24,
+    #         attention_head_dim=128,
+    #         num_layers=5,
+    #         num_single_layers=20,
+    #         patch_size=1,
+    #         axes_dims_rope=[32, 32, 32, 32],
+    #         mlp_ratio=3.0,
+    #         rope_theta=2000,
+    #         eps=1e-06,
+    #         guidance_embeds=False,
+    #         timestep_guidance_channels=256,
+    #         out_channels=None,    
+    #     )
+
+    #     print("Loading transformer weights...")
+    #     transformer_path = Path(MODEL_DIR) / "transformer"
+    #     safetensors_files = list(transformer_path.glob("*.safetensors"))
+
+    #     if safetensors_files:
+    #         state_dict = {}
+    #         for shard_file in sorted(safetensors_files):
+    #             print(f"Loading {shard_file.name}...")
+    #             shard_state_dict = load_file(str(shard_file))
+    #             state_dict.update(shard_state_dict)
+
+    #         transformer.load_state_dict(state_dict, strict=False)
+    #     else:
+    #         transformer = FluxTransformer2DModel.from_pretrained(
+    #             MODEL_DIR, subfolder="transformer", torch_dtype=torch.bfloat16, low_cpu_mem_usage=False, ignore_mismatched_sizes=True)
+        
+    #     print("Loading FLUX.2-klein-4B pipeline...")
+    #     pipe = Flux2KleinPipeline.from_pretrained( MODEL_DIR, transformer=transformer, torch_dtype=torch.bfloat16,).to("cuda")
+
+    #     #load LoRA weights
+    #     print("Loading LoRA weights...")
+    #     pipe.load_lora_weights(MODEL_DIR)
+
+    #     self.pipe = pipe
+    #     print("Model loading succesfully")
     def load_model(self):
         import torch
-        from diffusers import Flux2Pipeline#,Flux2KleinPipeline, FluxTransformer2DModel,AutoencoderKL, DiffusionPipeline
+        from diffusers import Flux2KleinPipeline
         
         volume.reload()
 
-        # transformer = FluxTransformer2DModel.from_pretrained(
-        #     MODEL_DIR, subfolder="transformer", torch_dtype=torch.bfloat16, ignore_mismatched_sizes=True, low_cpu_mem_usage=False,)
+        print("Loading FLUX.2-klein-4B pipeline...")
+        pipe = Flux2KleinPipeline.from_pretrained(
+            MODEL_DIR, torch_dtype=torch.bfloat16, low_cpu_mem_usage=False, ).to("cuda")
         
-        pipe = Flux2Pipeline.from_pretrained(
-            MODEL_DIR, torch_dtype=torch.bfloat16,ignore_mismatched_sizes=True, low_cpu_mem_usage=False,).to("cuda")
-        
-        pipe.enable_model_cpu_offload()
+        # Load LoRA weights
+        print("Loading LoRA weights...")
         pipe.load_lora_weights(MODEL_DIR)
+        
         self.pipe = pipe
-    
+        print("Model loaded successfully")
+
     @modal.method()
     def inference(self, text, config):
         import datetime, time, wandb, os
@@ -208,6 +278,7 @@ class Model:
 
         results_volume.commit()
         t3 = time.perf_counter()
+
         total_duration = t3 - t1
         inference_time = t2 - t1
         print(f"Image saved to {filepath}")
@@ -217,7 +288,9 @@ class Model:
             wandb.init(
                 project = os.environ.get("WANDB_PROJECT", "dreambooth_sdxl_app"),
                 job_type = "production-inference",
-                config={ "modal_dir": MODEL_DIR,
+                config={ 
+                        "model_name": "FLUX.2-klein-4B",
+                        "modal_dir": MODEL_DIR,
                         "num_inference_steps": config.num_inference_steps,
                         "guidance_scale": config.guidance_scale},
                 reinit=True # allows creating multiple logs in the same session
