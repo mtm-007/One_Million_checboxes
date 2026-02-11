@@ -81,8 +81,7 @@ image = image.env( {"HF_XNET_HIGH_PERFORMANCE": "1",})# "PYTORCH_CUDA_ALLOC_CONF
 @app.function( volumes={MODEL_DIR: volume}, image=image, secrets=[huggingface_secret], timeout=600,) #10 min 
 
 def download_models(config):
-    import torch
-    import json
+    import torch, json
     from pathlib import Path
     from diffusers import Flux2KleinPipeline
     from huggingface_hub import snapshot_download
@@ -198,64 +197,31 @@ def train(instance_example_urls, config):
 
 class Model:
     @modal.enter()
-    # def load_model(self):
-    #     import torch
-    #     from diffusers import Flux2KleinPipeline, FluxTransformer2DModel
-    #     from safetensors.torch import load_file
-        
-    #     volume.reload()
-    #     print("Creating tranformer with custom config...")
-    #     transformer = FluxTransformer2DModel(
-    #         in_channels=64,
-    #         joint_attention_dim=4096,
-    #         num_attention_heads=24,
-    #         attention_head_dim=128,
-    #         num_layers=5,
-    #         num_single_layers=20,
-    #         patch_size=1,
-    #         axes_dims_rope=[32, 32, 32, 32],
-    #         mlp_ratio=3.0,
-    #         rope_theta=2000,
-    #         eps=1e-06,
-    #         guidance_embeds=False,
-    #         timestep_guidance_channels=256,
-    #         out_channels=None,    
-    #     )
-
-    #     print("Loading transformer weights...")
-    #     transformer_path = Path(MODEL_DIR) / "transformer"
-    #     safetensors_files = list(transformer_path.glob("*.safetensors"))
-
-    #     if safetensors_files:
-    #         state_dict = {}
-    #         for shard_file in sorted(safetensors_files):
-    #             print(f"Loading {shard_file.name}...")
-    #             shard_state_dict = load_file(str(shard_file))
-    #             state_dict.update(shard_state_dict)
-
-    #         transformer.load_state_dict(state_dict, strict=False)
-    #     else:
-    #         transformer = FluxTransformer2DModel.from_pretrained(
-    #             MODEL_DIR, subfolder="transformer", torch_dtype=torch.bfloat16, low_cpu_mem_usage=False, ignore_mismatched_sizes=True)
-        
-    #     print("Loading FLUX.2-klein-4B pipeline...")
-    #     pipe = Flux2KleinPipeline.from_pretrained( MODEL_DIR, transformer=transformer, torch_dtype=torch.bfloat16,).to("cuda")
-
-    #     #load LoRA weights
-    #     print("Loading LoRA weights...")
-    #     pipe.load_lora_weights(MODEL_DIR)
-
-    #     self.pipe = pipe
-    #     print("Model loading succesfully")
     def load_model(self):
-        import torch
+        import torch,json
         from diffusers import Flux2KleinPipeline
         
         volume.reload()
 
-        print("Loading FLUX.2-klein-4B pipeline...")
+        # Modify the transformer config to match checkpoint dimensions
+        # config_path = Path(MODEL_DIR) / "transformer" / "config.json"
+        # if config_path.exists():
+        #     with open(config_path, 'r') as f:
+        #         transformer_config = json.load(f)
+            
+        #     # Update to match checkpoint dimensions
+        #     transformer_config['joint_attention_dim'] = 4096  # Instead of 7680
+        #     transformer_config['in_channels'] = 64  # Instead of 128
+        #     transformer_config['out_channels'] = 64  # Instead of 128
+            
+        #     with open(config_path, 'w') as f:
+        #         json.dump(transformer_config, f, indent=2)
+            
+        #     print("✓ Transformer config updated to match checkpoint")
+
+        print(f"Loading model FLUX.2-klein-4B pipeline...")
         pipe = Flux2KleinPipeline.from_pretrained(
-            MODEL_DIR, torch_dtype=torch.bfloat16, low_cpu_mem_usage=False, ).to("cuda")
+            MODEL_DIR, torch_dtype=torch.bfloat16, low_cpu_mem_usage=False,).to("cuda")
         
         # Load LoRA weights
         print("Loading LoRA weights...")
@@ -269,7 +235,8 @@ class Model:
         import datetime, time, wandb, os
 
         t1 = time.perf_counter()
-        image =  self.pipe(  text, num_inference_steps=config.num_inference_steps, guidance_scale=config.guidance_scale,).images[0]
+        print("Inference started...")
+        image =  self.pipe(  prompt=text, num_inference_steps=config.num_inference_steps, guidance_scale=config.guidance_scale,).images[0]
 
         t2 = time.perf_counter()
         filename = f"generated_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
