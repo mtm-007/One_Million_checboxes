@@ -12,12 +12,13 @@ os.environ["WANDB_PROJECT"] = "dreambooth_sdxl_app"
 app = modal.App( name = "dreambooth-app")
  
 image  = modal.Image.debian_slim(python_version="3.10").apt_install("git").uv_pip_install(  
-        "python-fasthtml", "accelerate==0.34.0", "datasets==2.21.0", "ftfy==6.3.1", "huggingface-hub>=0.21.2", "numpy<2", "peft==0.17.0",
+        "python-fasthtml", "diffusers"," accelerate==0.34.0", "datasets==2.21.0", "ftfy==6.3.1", "huggingface-hub>=0.21.2", "numpy<2", "peft==0.17.0",
         "pydantic==2.9.2", "sentencepiece==0.2.0", "smart_open==7.0.5", "starlette==0.41.2",
         "transformers==4.52.3", "torch==2.5.1", "torchvision==0.20.1", "triton>=3.0.0", "wandb==0.17.6", 
-        "diffusers @ git+https://github.com/huggingface/diffusers.git",
+        #"diffusers @ git+https://github.com/huggingface/diffusers.git",
         #"diffusers --upgrade",#"bitsandbytes==0.45.0",
     )
+# .run_commands("pip install git+https://github.com/huggingface/diffusers.git")
 
 # GIT_SHA = "bedc67c75fe36dbe5c20b55f15b87bcbbe513d8d"  # specify the commit to fetch )
 
@@ -82,8 +83,7 @@ image = image.env( {"HF_XNET_HIGH_PERFORMANCE": "1",})# "PYTORCH_CUDA_ALLOC_CONF
 
 def download_models(config):
     import torch
-    from diffusers import Flux2KleinPipeline,FluxTransformer2DModel
-    from diffusers import  DiffusionPipeline#,AutoencoderKL,
+    from diffusers import Flux2Pipeline#,Flux2KleinPipeline,FluxTransformer2DModel,
     from huggingface_hub import snapshot_download
 
     snapshot_download( config.model_name, local_dir= MODEL_DIR, ignore_patterns=["*.pt", "*.bin"],)
@@ -91,7 +91,7 @@ def download_models(config):
     # transformer = FluxTransformer2DModel.from_pretrained(
     #     MODEL_DIR, subfolder="transformer",torch_dtype=torch.bfloat16, ignore_mismatched_sizes=True, low_cpu_mem_usage=False,)
     
-    pipe = Flux2KleinPipeline.from_pretrained( 
+    pipe = Flux2Pipeline.from_pretrained( 
         MODEL_DIR, torch_dtype=torch.bfloat16, ignore_mismatched_sizes=True, low_cpu_mem_usage=False,)
 
     #pipe.to("cuda")
@@ -180,14 +180,14 @@ class Model:
     @modal.enter()
     def load_model(self):
         import torch
-        from diffusers import Flux2KleinPipeline, FluxTransformer2DModel,AutoencoderKL, DiffusionPipeline
+        from diffusers import Flux2Pipeline#,Flux2KleinPipeline, FluxTransformer2DModel,AutoencoderKL, DiffusionPipeline
         
         volume.reload()
 
         # transformer = FluxTransformer2DModel.from_pretrained(
         #     MODEL_DIR, subfolder="transformer", torch_dtype=torch.bfloat16, ignore_mismatched_sizes=True, low_cpu_mem_usage=False,)
         
-        pipe = Flux2KleinPipeline.from_pretrained(
+        pipe = Flux2Pipeline.from_pretrained(
             MODEL_DIR, torch_dtype=torch.bfloat16,ignore_mismatched_sizes=True, low_cpu_mem_usage=False,).to("cuda")
         
         pipe.enable_model_cpu_offload()
