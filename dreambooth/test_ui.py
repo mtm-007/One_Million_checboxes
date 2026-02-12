@@ -21,6 +21,10 @@ os.environ["WANDB_PROJECT"] = "dreambooth_sdxl_app"
 
 assets_path = Path(__file__).parent / "assets"
 
+# Create Modal volume for visitor data AND Redis persistence
+visitor_volume = modal.Volume.from_name("dreambooth-visitor-data", create_if_missing=True)
+VISITOR_DATA_DIR = "/data"
+
 # Build image with all dependencies
 image = (
     image.pip_install("redis>=5.3.0", "aiosqlite", "pytz", "httpx")
@@ -30,10 +34,6 @@ image = (
         .add_local_python_source("utils")  # Add your utils.py
 )
 
-# Create Modal volume for visitor data AND Redis persistence
-visitor_volume = modal.Volume.from_name("dreambooth-visitor-data", create_if_missing=True)
-VISITOR_DATA_DIR = "/data"
-
 @app.function(
     image=image, max_containers=3, volumes={  RESULTS_DIR: results_volume, VISITOR_DATA_DIR: visitor_volume},  # Persist both SQLite and Redis data
     timeout=3600 )
@@ -42,16 +42,11 @@ VISITOR_DATA_DIR = "/data"
 def fasthtml_app():
     redis_process = subprocess.Popen(
         [
-            "redis-server",
-            "--protected-mode", "no",
-            "--bind", "127.0.0.1",
-            "--port", "6379",
-            "--dir", "/data",  # Store data in persistent volume
+            "redis-server", "--protected-mode", "no", "--bind", "127.0.0.1",
+            "--port", "6379", "--dir", "/data",  # Store data in persistent volume
             "--save", "60", "1",  # Save every minute if 1 change
             "--save", ""  # Disable all other automatic saves
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     time.sleep(1)  # Give Redis a moment to start
 
@@ -180,44 +175,30 @@ def fasthtml_app():
 
         return fh.Html(
             fh.Head(
-                fh.Title("Dreambooth on Modal"),
-                fh.Link(rel="stylesheet", href="/assets/styles.css?v=2"),
+                fh.Title("Dreambooth on Modal"), fh.Link(rel="stylesheet", href="/assets/styles.css?v=2"),
             ),
             fh.Body(
                 fh.Main(
-                    fh.H1(f"Dream up and Generate Images with Flux"),
-                    fh.P("Describe what they are doing, styles, artist, etc."),
+                    fh.H1(f"Dream up and Generate Images with Flux"), fh.P("Describe what they are doing, styles, artist, etc."),
                     fh.Form(
                         fh.Textarea(
-                            name="prompt",
-                            placeholder=f"Describe {instance_phrase}",
-                            rows=6,
-                            cls="prompt-box",
-                            id="prompt-input"
+                            name="prompt", placeholder=f"Describe {instance_phrase}", rows=6, cls="prompt-box", id="prompt-input"
                         ),
-                        fh.Button("Dream", type="submit"),
-                        method="post",
-                        action="/generate",
+                        fh.Button("Dream", type="submit"), method="post", action="/generate",
                     ),
                     fh.Div(
                         fh.H3("Try an example: "),
                         *[
                             fh.Button(
-                                prompt,
-                                cls="example-btn",
-                                onclick=f"document.getElementById('prompt-input').value = `{prompt}`"
-                            )
-                            for prompt in example_prompts
-                        ],
-                        cls="examples"
+                                prompt, cls="example-btn", onclick=f"document.getElementById('prompt-input').value = `{prompt}`"
+                            ) for prompt in example_prompts
+                        ], cls="examples"
                     ),
                     fh.H2("Latest result"),
                     fh.Img(src=f"/image/{latest.name}") if latest else fh.P("No images yet"),
                     fh.H2("Gallery"),
                     fh.Div(
-                        *[fh.Img(src=f"/image/{img.name}", cls="thumb") for img in history],
-                        cls="gallery",
-                    ),
+                        *[fh.Img(src=f"/image/{img.name}", cls="thumb") for img in history], cls="gallery", ),
                     # Add link to visitors page
                     fh.Div(
                         fh.A("📊 View Visitor Analytics", href="/visitors", 
@@ -288,13 +269,8 @@ def fasthtml_app():
             
             table_rows.append(
                 fh.Tr(
-                    fh.Td(time_str),
-                    fh.Td(v["ip"]),
-                    fh.Td(f"{v.get('city', 'Unknown')}, {v.get('country', 'Unknown')}"),
-                    fh.Td(v.get("device", "Unknown")),
-                    fh.Td(class_badge),
-                    fh.Td(security_badge),
-                    fh.Td(v.get("isp", "-")[:40]),
+                    fh.Td(time_str),  fh.Td(v["ip"]), fh.Td(f"{v.get('city', 'Unknown')}, {v.get('country', 'Unknown')}"),
+                    fh.Td(v.get("device", "Unknown")), fh.Td(class_badge), fh.Td(security_badge), fh.Td(v.get("isp", "-")[:40]),
                     fh.Td(fh.Span(str(v.get("visit_count", 1)), style="background:rgba(99,102,241,0.15);color:#6366f1;padding:4px 8px;border-radius:4px;font-weight:600;")),
                     style="border-bottom:1px solid #e5e7eb;"
                 )
@@ -326,32 +302,17 @@ def fasthtml_app():
             ),
             fh.Body(
                 fh.Div(
-                    fh.H1("📊 Visitor Analytics"),
-                    fh.A("← Back to Generator", href="/", cls="back-link"),
+                    fh.H1("📊 Visitor Analytics"), fh.A("← Back to Generator", href="/", cls="back-link"),
                     
                     # Stats cards
                     fh.Div(
-                        fh.Div(
-                            fh.Div("Total Visitors", cls="stat-label"),
-                            fh.Div(str(stats["total"]), cls="stat-number"),
-                            cls="stat-card"
+                        fh.Div( fh.Div("Total Visitors", cls="stat-label"), fh.Div(str(stats["total"]), cls="stat-number"), cls="stat-card"
                         ),
-                        fh.Div(
-                            fh.Div("👤 Humans", cls="stat-label"),
-                            fh.Div(str(stats["humans"]), cls="stat-number"),
-                            cls="stat-card"
+                        fh.Div( fh.Div("👤 Humans", cls="stat-label"), fh.Div(str(stats["humans"]), cls="stat-number"), cls="stat-card"
                         ),
-                        fh.Div(
-                            fh.Div("🤖 Bots", cls="stat-label"),
-                            fh.Div(str(stats["bots"]), cls="stat-number"),
-                            cls="stat-card"
+                        fh.Div( fh.Div("🤖 Bots", cls="stat-label"), fh.Div(str(stats["bots"]), cls="stat-number"), cls="stat-card"
                         ),
-                        fh.Div(
-                            fh.Div("🔒 VPN Users", cls="stat-label"),
-                            fh.Div(str(stats["vpn_users"]), cls="stat-number"),
-                            cls="stat-card"
-                        ),
-                        cls="stats-grid"
+                        fh.Div( fh.Div("🔒 VPN Users", cls="stat-label"), fh.Div(str(stats["vpn_users"]), cls="stat-number"), cls="stat-card" ), cls="stats-grid"
                     ),
                     
                     # Pagination
@@ -367,17 +328,10 @@ def fasthtml_app():
                     fh.Table(
                         fh.Thead(
                             fh.Tr(
-                                fh.Th("Time"),
-                                fh.Th("IP"),
-                                fh.Th("Location"),
-                                fh.Th("Device"),
-                                fh.Th("Classification"),
-                                fh.Th("Security"),
-                                fh.Th("ISP"),
-                                fh.Th("Visits"),
+                                fh.Th("Time"),  fh.Th("IP"),  fh.Th("Location"), fh.Th("Device"),
+                                fh.Th("Classification"), fh.Th("Security"), fh.Th("ISP"), fh.Th("Visits"),
                             )
-                        ),
-                        fh.Tbody(*table_rows) if table_rows else fh.Tbody(fh.Tr(fh.Td("No visitors yet", colspan="8", style="text-align:center;padding:2rem;")))
+                        ), fh.Tbody(*table_rows) if table_rows else fh.Tbody(fh.Tr(fh.Td("No visitors yet", colspan="8", style="text-align:center;padding:2rem;")))
                     ),
                     
                     # Pagination (bottom)
@@ -386,9 +340,7 @@ def fasthtml_app():
                         fh.Span(f"Showing {offset + 1}-{min(offset + limit, total_in_db)} of {total_in_db}"),
                         fh.A("Next →", href=f"/visitors?offset={next_offset}&limit={limit}", cls="btn") if has_more else fh.Span("Next →", cls="btn disabled"),
                         cls="pagination"
-                    ),
-                    
-                    cls="container"
+                    ), cls="container"
                 )
             )
         )

@@ -57,7 +57,7 @@ def web():# Start redis server locally inside the container (persisted to volume
             sqlite_count = await utils.get_visitor_count_sqlite()
             if sqlite_count > 0:
                 print(f"[STARTUP] Redis empty, restoring {sqlite_count} visitors from SQLite...")
-                await utils.estore_visitors_from_sqlite(redis)
+                #await utils.restore_visitors_from_sqlite(redis)
 
         await redis.setbit(checkboxes_bitmap_key, N_CHECKBOXES - 1, 0)
         print("[STARTUP] Bitmap initialized/verified,... Migration check complete")
