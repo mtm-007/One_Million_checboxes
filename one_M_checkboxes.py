@@ -100,7 +100,7 @@ def web():# Start redis server locally inside the container (persisted to volume
         await redis.close() #not necessarily needed here just best practice
         redis_process.terminate()
         redis_process.wait()
-        volume.commit()
+        await volume.commit.aio()
         print("Volume committed  -data persisted")
 
     style= open(css_path_remote, "r").read()
@@ -229,6 +229,14 @@ def web():# Start redis server locally inside the container (persisted to volume
     async def get(request):
         client_ip = utils.get_real_ip(request)
         user_agent = request.headers.get('user-agent', 'unknown')
+        referrer = request.headers.get('referer', 'direct')
+
+        #start session tracking
+        await utils.start_session(client_ip, user_agent, "/", redis)
+        await utils.track_page_view(client_ip, "/", referrer, redis)
+
+        #track referrer 
+        await utils.track_referrer(client_ip, referrer, redis)
 
         client = utils.Client()  #register a new client
         async with  clients_mutex:
@@ -243,6 +251,114 @@ def web():# Start redis server locally inside the container (persisted to volume
         return( 
             fh.Titled(f"One Million Checkboxes"),
             fh.Main(
+                # Add tracking script
+                fh.Script("""
+                    const tracker = {
+                        startTime: Date.now(),
+                        lastHeartbeat: Date.now(),
+                        scrollDepth: 0,
+                        
+                        init() {
+                            // Send initial heartbeat immediately
+                            this.sendHeartbeat();
+                            
+                            // Send heartbeat every 10 seconds (faster cadence)
+                            setInterval(() => {
+                                this.sendHeartbeat();
+                            }, 10000);
+                            
+                            // Track user activity - send heartbeat on any interaction
+                            const activityEvents = ['click', 'scroll', 'keypress', 'mousemove', 'touchstart'];
+                            activityEvents.forEach(event => {
+                                document.addEventListener(event, () => {
+                                    this.onUserActivity();
+                                }, { passive: true });
+                            });
+                            
+                            // Track scroll depth
+                            let scrollTimer;
+                            window.addEventListener('scroll', () => {
+                                clearTimeout(scrollTimer);
+                                scrollTimer = setTimeout(() => {
+                                    const depth = Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100);
+                                    this.scrollDepth = Math.max(this.scrollDepth, depth);
+                                    
+                                    fetch('/track-scroll', {
+                                        method: 'POST',
+                                        headers: {'Content-Type': 'application/json'},
+                                        body: JSON.stringify({depth: depth})
+                                    }).catch(err => console.log('Scroll tracking failed:', err));
+                                }, 500);
+                            });
+                            
+                            // Track when user leaves (multiple methods for reliability)
+                            window.addEventListener('beforeunload', () => {
+                                this.endSession();
+                            });
+                            
+                            document.addEventListener('visibilitychange', () => {
+                                if (document.hidden) {
+                                    this.endSession();
+                                } else {
+                                    this.sendHeartbeat();
+                                }
+                            });
+                            
+                            window.addEventListener('pagehide', () => {
+                                this.endSession();
+                            });
+                        },
+                        
+                        onUserActivity() {
+                            // Debounce - only send heartbeat if last one was >3 seconds ago
+                            const now = Date.now();
+                            if (now - this.lastHeartbeat > 3000) {
+                                this.sendHeartbeat();
+                            }
+                        },
+                        
+                        sendHeartbeat() {
+                            const duration = (Date.now() - this.startTime) / 1000;
+                            
+                            fetch('/heartbeat', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({
+                                    duration: duration,
+                                    timestamp: Date.now()
+                                }),
+                                keepalive: true
+                            }).catch(err => console.log('Heartbeat failed:', err));
+                            
+                            this.lastHeartbeat = Date.now();
+                        },
+                        
+                        endSession() {
+                            const duration = (Date.now() - this.startTime) / 1000;
+                            
+                            const data = JSON.stringify({
+                                duration: duration,
+                                scrollDepth: this.scrollDepth,
+                                timestamp: Date.now()
+                            });
+                            
+                            if (navigator.sendBeacon) {
+                                navigator.sendBeacon('/session-end', data);
+                            } else {
+                                fetch('/session-end', {
+                                    method: 'POST',
+                                    headers: {'Content-Type': 'application/json'},
+                                    body: data,
+                                    keepalive: true
+                                }).catch(err => console.log('Session end failed:', err));
+                            }
+                        }
+                    };
+                    
+                    // Start tracking immediately
+                    tracker.init();
+                """),
+                
                 fh.Div(
                     NotStr("""
                         <script data-name="BMC-Widget" data-cfasync="false" 
@@ -270,11 +386,218 @@ def web():# Start redis server locally inside the container (persisted to volume
                     hx_get=f"/diffs/{client.id}",#critical for poll diffs
                     hx_trigger="every 500ms",hx_swap="none"
                 ),
-                fh.Div("Made with FastHTML + Redis deployed with Modal", cls="footer"), cls="container", ))
+                fh.Div("Made with FastHTML + Redis deployed with Modal", cls="footer"), cls="container",
+            ))
 
+    #add new tracking endpoints
+    @app.post("/heartbeat")
+    async def heartbeat(request):
+        """Track that user is still active and update duration"""
+        client_ip = utils.get_real_ip(request)
+        
+        try:
+            data = await request.json()
+            duration = data.get("duration", 0)  # Duration in seconds from frontend
+        except:
+            duration = 0
+        
+        # Update session activity
+        await utils.update_session_activity(client_ip, redis)
+        
+        # Also update visitor record with current duration (live update)
+        if duration > 0:
+            visitor_key = f"visitor:{client_ip}"
+            visitor_data = await redis.get(visitor_key)
+            
+            if visitor_data:
+                visitor = json.loads(visitor_data)
+                
+                # Update current session duration (will be finalized on session end)
+                visitor["current_session_duration"] = duration
+                visitor["last_activity_time"] = time.time()
+                
+                await redis.set(visitor_key, json.dumps(visitor))
+        
+        return {"status": "ok", "duration": duration}
+
+    
+    @app.post("/track-scroll")
+    async def track_scroll(request):
+        """ Track scroll depth"""
+        client_ip = utils.get_real_ip(request)
+        data = await request.json()
+        depth = data.get("depth", 0)
+
+        await utils.update_scroll_depth(client_ip, depth, redis)
+        return {"status": "ok"}
+    
+    @app.post("/session-end")
+    async def session_end(request):
+        """End session and save final time spent"""
+        client_ip = utils.get_real_ip(request)
+        
+        try:
+            data = await request.json()
+            duration = data.get("duration", 0)  # Duration in seconds from frontend
+        except:
+            duration = 0
+        
+        # Update visitor record with final session duration
+        visitor_key = f"visitor:{client_ip}"
+        visitor_data = await redis.get(visitor_key)
+        
+        if visitor_data:
+            visitor = json.loads(visitor_data)
+            
+            # Add this session's duration to total
+            visitor["total_time_spent"] = visitor.get("total_time_spent", 0) + duration
+            visitor["last_session_duration"] = duration
+            visitor["total_sessions"] = visitor.get("total_sessions", 0) + 1
+            
+            if visitor["total_sessions"] > 0:
+                visitor["avg_session_duration"] = visitor["total_time_spent"] / visitor["total_sessions"]
+            
+            await redis.set(visitor_key, json.dumps(visitor))
+            await utils.save_visitor_to_sqlite(visitor)
+            
+            print(f"[SESSION END] {client_ip} spent {duration:.1f} seconds")
+        
+        # Clean up session
+        session_key = f"session:{client_ip}"
+        await redis.delete(session_key)
+        
+        return {"status": "ok", "duration": duration}
+
+    @app.get("/referrer-stats")
+    async def referrer_stats_page(request):
+        """Show referrer/traffic source analytics"""
+        
+        # Get top referrers
+        top_referrers = await utils.get_referrer_stats(redis, limit=30)
+        
+        # Get referrer type breakdown
+        type_stats = await utils.get_referrer_type_stats(redis)
+        
+        # Calculate total
+        total_visitors = sum(type_stats.values())
+        
+        # Create type breakdown chart
+        type_chart_bars = []
+        type_colors = {
+            "direct": "#667eea",
+            "social": "#ff6b6b",
+            "search": "#4ecdc4",
+            "referral": "#45b7d1",
+            "unknown": "#95a5a6"
+        }
+        
+        for ref_type, count in type_stats.items():
+            if total_visitors > 0:
+                percentage = (count / total_visitors) * 100
+                type_chart_bars.append(
+                    fh.Div(
+                        fh.Span(ref_type.title(), cls="bar-label-horizontal"),
+                        fh.Div(
+                            fh.Div(
+                                fh.Span(f"{count} ({percentage:.1f}%)", 
+                                    style="color: white; font-size: 0.9em; padding-left: 8px;"
+                                ) if count > 0 else "",
+                                style=f"width: {max(percentage, 2)}%; background: {type_colors.get(ref_type, '#999')};",
+                                cls="bar-fill-horizontal"
+                            ),
+                            cls="bar-track-horizontal"
+                        ),
+                        cls="bar-horizontal"
+                    ))
+        
+        # Create top referrers table
+        referrer_rows = []
+        for i, ref in enumerate(top_referrers, 1):
+            source = ref["source"]
+            count = ref["count"]
+            percentage = (count / total_visitors * 100) if total_visitors > 0 else 0
+            
+            # Add icon based on source
+            if "Google" in source:
+                icon = "🔍"
+            elif any(social in source for social in ["Facebook", "Twitter", "Instagram", "LinkedIn", "Reddit"]):
+                icon = "📱"
+            elif source == "Direct":
+                icon = "🔗"
+            else:
+                icon = "🌐"
+            
+            referrer_rows.append(
+                fh.Tr(
+                    fh.Td(f"#{i}"),
+                    fh.Td(f"{icon} {source}"),
+                    fh.Td(count),
+                    fh.Td(f"{percentage:.1f}%"),
+                    cls="visitor-row"
+                ))
+        
+        return (
+            fh.Titled("Referrer Analytics",
+                fh.Meta(name="viewport", content="width=device-width, initial-scale=1.0")),
+            fh.Main(
+                fh.H1("Traffic Sources & Referrers", cls="dashboard-title"),
+                
+                fh.Div(
+                    fh.Div("Total Tracked Visitors", cls="stats-label"), 
+                    fh.Div(f"{total_visitors:,}", cls="stats-number"),
+                    cls="stats-card"
+                ),
+                
+                # Traffic Type Breakdown
+                fh.Div(
+                    fh.H2("Traffic by Type", cls="section-title"),
+                    fh.Div(
+                        fh.Div(
+                            *type_chart_bars if type_chart_bars else [
+                                fh.P("No referrer data yet", style="text-align: center; color:#999;")
+                            ],
+                            cls="chart-bars-container"
+                        ), 
+                        cls="chart-container"
+                    ),
+                ),
+                
+                # Top Referrers Table
+                fh.Div(
+                    fh.H2("Top Referrer Sources", cls="section-title"),
+                    fh.Table(
+                        fh.Tr(
+                            fh.Th("Rank"), 
+                            fh.Th("Source"), 
+                            fh.Th("Visitors"), 
+                            fh.Th("Percentage")
+                        ),
+                        *referrer_rows if referrer_rows else [
+                            fh.Tr(fh.Td("No data yet", colspan=4, 
+                                style="text-align: center; color:#999; padding: 20px;"))
+                        ], 
+                        cls="table visitors-table"
+                    ),
+                    style="margin-top: 30px;"
+                ),
+                
+                fh.Div(  
+                    fh.A("← Back to visitors", href="/visitors", cls="back-link"),
+                    fh.A("← Back to checkboxes", href="/", cls="back-link", style="margin-left: 20px;"),
+                    style="text-align: center; margin-top: 30px;" 
+                ), 
+                cls="visitors-container"
+            ))
+    
     #users submitting checkbox toggles
     @app.post("/toggle/{i}/{client_id}")
     async def toggle(request, i:int, client_id:str):
+        client_ip = utils.get_real_ip(request)
+
+        #log the checkbox toggle event
+        await utils.log_event(client_ip, "checkbox_toggle", 
+            { "checkbox_id": i, "client_id": client_id, "timestamp": time.time() }, redis)
+        
         async with clients_mutex:
             client = clients.get(client_id)
                 
@@ -303,9 +626,10 @@ def web():# Start redis server locally inside the container (persisted to volume
             for client_id in expired: del clients[client_id]
 
         checked, unchecked = await get_status()
-        return fh.Div(  fh.Span(f"{checked:,}", cls="status-checked"), " checked • ", fh.Span(f"{unchecked:,}", cls="status-unchecked"),
+        return fh.Div(  fh.Span(f"{checked:,}", cls="status-checked"), " checked • ",  fh.Span(f"{unchecked:,}", cls="status-unchecked"),
                         " unchecked", cls="stats", id="stats", hx_get="/stats", hx_trigger="every 1s",hx_swap="outerHTML", hx_swap_oob="true" )
     
+
     @app.get("/diffs/{client_id}") #clients polling for outstanding diffs
     async def diffs(request, client_id:str):
         async with clients_mutex:
@@ -328,6 +652,13 @@ def web():# Start redis server locally inside the container (persisted to volume
     
     @app.get("/visitors")
     async def visitors_page(request, offset: int = 0, limit: int = 5, days: int= 30):#100):
+        client_ip = utils.get_real_ip(request)
+        referrer = request.headers.get('referer', '')
+
+        #track this page view and referrer
+        await utils.track_page_view(client_ip, "/visitors", referrer, redis)
+        await utils.track_referrer(client_ip, referrer, redis)
+
         days = max(7, min(days, 30))
         print(f"[VISITORS] Loading visitors dashboard: offset={offset}, limit={limit}, window={days}")
         recent_ips = await redis.zrange("recent_visitors_sorted", offset, offset + limit - 1, desc=True)
@@ -405,11 +736,36 @@ def web():# Start redis server locally inside the container (persisted to volume
 
                 local_dt = utils.utc_to_local(v["timestamp"])
                 local_time_str = local_dt.strftime("%H:%M:%S")
-        
+
+                # Get referrer info
+                first_ref = v.get("first_referrer", {})
+                last_ref = v.get("last_referrer", {})
+                
+                first_source = first_ref.get("source", "Direct") if first_ref else "Direct"
+                last_source = last_ref.get("source", "Direct") if last_ref else "Direct"
+                
+                # Add color coding
+                def get_ref_badge(source, ref_type):
+                    colors = {
+                        "direct": "#95a5a6",
+                        "social": "#ff6b6b", 
+                        "search": "#4ecdc4",
+                        "referral": "#45b7d1"
+                    }
+                    color = colors.get(ref_type, "#999")
+                    return fh.Span(
+                        source[:20], 
+                        style=f"background:{color}; color:white; padding:2px 6px; border-radius:4px; font-size:0.8em;"
+                    )
+                
+                first_ref_badge = get_ref_badge(first_source, first_ref.get("type", "direct"))
+                last_ref_badge = get_ref_badge(last_source, last_ref.get("type", "direct"))
+    
                 table_content.append(
-                    fh.Tr(  fh.Td(v.get("ip")), fh.Td(v.get("device", "Unknown ?")), fh.Td(security_badge), fh.Td(category_cell), fh.Td(v.get("isp") or "-", style="max-width:150px;overflow:hidden;text-overflow:ellipsis; white-space:nowrap; font-size:0.85em;"),
+                    fh.Tr(  fh.Td(v.get("ip")), fh.Td(v.get("device", "Unknown ?")), fh.Td(security_badge), fh.Td(category_cell), fh.Td(first_ref_badge), fh.Td(last_ref_badge), fh.Td(v.get("isp") or "-", style="max-width:150px;overflow:hidden;text-overflow:ellipsis; white-space:nowrap; font-size:0.85em;"),
                             fh.Td(v.get("city") or "-"), fh.Td(v.get("zip", "-")), fh.Td(v.get("country") or "-"), 
-                            fh.Td(fh.Span(f"{v.get('visit_count', 1)}", cls="visit-badge")), fh.Td(local_time_str), cls="visitor-row" ))
+                            fh.Td(fh.Span(f"{v.get('visit_count', 1)}", cls="visit-badge")), fh.Td(local_time_str), 
+                            fh.Td(f"{v.get('total_time_spent', 0) /60:.1f}m"), fh.Td(v.get('total_actions', 0)), fh.Td(v.get('last_page', '/')[:20]), fh.Td(local_time_str),cls="visitor-row" ))
         
         now_local = utils.utc_to_local(time.time())
         chart_days_data = []
@@ -482,17 +838,30 @@ def web():# Start redis server locally inside the container (persisted to volume
                     cls="chart-bars-container"), 
                 cls="chart-container" ),
 
+                # In your visitors dashboard, add a link:
+                fh.Div(  
+                    fh.A("← Back to checkboxes", href="/", cls="back-link"),
+                    fh.A("View Referrer Stats →", href="/referrer-stats", cls="back-link", 
+                        style="margin-left: 20px; background: #4ecdc4;"),
+                    style="text-align: center; margin-top: 30px;" 
+                ),
+
                 #visitors table with day grouping
                 fh.Div(
                     fh.H2(f"Visitors Dashboard (Last {limit}  Visitors)", cls="section-title"),
+                    
+                    # Add scroll hint
+                    fh.P("← Scroll horizontally to see all columns →",
+                        style="text-align: center; color:#667eea; font-size: 0.9em; margin-bottom: 10px; font-weight: 600;"),
+                
                     fh.Div(
                         fh.P("<- Scroll horizontal to see all columns ->",
                             style="text-align: center; color:#999; font-size: 0.85em; margin-bottom: 10px; display: none;",cls="mobile-scroll-hint"),
                         fh.Table(
-                            fh.Tr( fh.Th("IP"), fh.Th("device"), fh.Th("Security"), fh.Th("Category"), fh.Th("ISP/Org"), fh.Th("City"), fh.Th("Zip"), fh.Th("Country"), fh.Th("Visits"), fh.Th("Last seen"), ),
+                            fh.Tr( fh.Th("IP"), fh.Th("device"), fh.Th("Security"), fh.Th("Category"), fh.Th("First Source"), fh.Th("Last Source"), fh.Th("ISP/Org"), fh.Th("City"), fh.Th("Zip"), fh.Th("Country"), fh.Th("Visits"), fh.Th("Last seen"), fh.Th("Time Spent"), fh.Th("Actions"), fh.Th("Last Page"),),
                             *table_content, cls="table visitors-table"
-                        )if table_content else fh.P("No visitors to display", style="text-align: center; color:#999; padding: 20px;"),
-                        style="overflow-x: auto; -webkit-overflow-scrolling: touch;")),
+                        )if table_content else fh.P("No visitors to display", style="text-align: center; color:#999; padding: 20px;"), 
+                        cls="table-wrapper" , style="overflow-x: auto; -webkit-overflow-scrolling: touch;" )),
                 pagination_controls,
                 fh.Div(  fh.A("<- Back to checkboxes", href="/", cls="back-link"), style="text-align: center; margin-top: 30px;" ), cls="visitors-container" 
                       ))

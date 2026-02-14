@@ -6,6 +6,7 @@ from fasthtml.core import viewport
 from fasthtml.js import NotStr
 import fasthtml.common as fh
 from datetime import datetime, timezone
+from typing import Optional, Dict, Any
 from redis.asyncio import Redis
 import datetime as dt
 import aiosqlite
@@ -15,33 +16,341 @@ LOCAL_TIMEZONE = pytz.timezone("America/Chicago")
 
 SQLITE_DB_PATH = "/data/visitors.db"
 
-class Client:
-    def __init__(self):
-        self.id = str(uuid4())
-        self.diffs = []
-        self.inactive_deadline = time.time() + 30
-        self.geo = None
-        self.geo_ts = 0.0
+async def start_session(client_ip: str, user_agent: str, page: str, redis):
+    """ start a new session for a visitor"""
+    session_key = f"session:{client_ip}"
+
+    session_data = {
+        "ip": client_ip, "user_agent": user_agent, "start_time": time.time(), "last_activity": time.time(),
+        "page_views": [{"page": page, "timestamp": time.time()}],# "actions": 0, "scroll_depth": 0
+    }
+
+    #store session with 1 hour expiry
+    await redis.set(session_key, json.dumps(session_data), ex=3600)
+    print(f"[SESSION] Started session for  {client_ip}")
+    return session_data
+
+async def update_session_activity(client_ip: str, redis):
+    """ Update last activity timestamp"""
+    session_key = f"session:{client_ip}"
+    session_data = await redis.get(session_key)
+
+    if session_data:
+        data = json.loads(session_data)
+        data["last_activity"] = time.time()
+        await redis.set(session_key, json.dumps(data), ex=3600)
+        return True
+    return False
+
+async def end_session(client_ip: str, redis):
+    """ End session and calculate total time spent"""
+    session_key = f"session:{client_ip}"
+    session_data = await redis.get(session_key)
+
+    if not session_data: return None
+
+    data = json.loads(session_data)
+    start_time = data.get("start_time")
+    duration_seconds = time.time() - start_time
+
+    #Update visitor record with session stats
+    visitor_key = f"visitor:{client_ip}"
+    visitor_data = await redis.get(visitor_key)
+
+    if visitor_data:
+        visitor = json.loads(visitor_data)
+        visitor["total_time_spent"] = visitor.get("total_time_spent", 0) + duration_seconds
+        visitor["last_session_duration"] = duration_seconds
+        visitor["total_sessions"] = visitor.get("total_sessions", 0) + 1
+        visitor["total_actions"] = visitor.get("total_actions", 0) + data.get("actions", 0)
+        visitor["avg_session_duration"] = visitor["total_time_spent"] / visitor["total_sessions"]
+
+        await redis.set(visitor_key, json.dumps(visitor))
+        await save_visitor_to_sqlite(visitor)
+
+        print(f"[SESSION] Ended session for {client_ip}: {duration_seconds:.1f}s, {data.get('actions', 0)} actions")
+
+    #clean up session
+    await redis.delete(session_key)
+    return duration_seconds
+
+#Event tracking functions
+async def log_event(client_ip: str, event_type: str, event_data: Dict[str, Any], redis):
+    """ Log user events/actions"""
+    event = { "ip": client_ip, "type": event_type, "data": event_data, "timestamp": time.time() }
+
+    #store in redis list (keep last 100 events per user)
+    events_key = f"events:{client_ip}"
+    await redis.lpush(events_key, json.dumps(event))
+    await redis.ltrim(events_key, 0, 99) #keep only last 100
+
+    #update session action count
+    session_key = f"session:{client_ip}"
+    session_data = await redis.get(session_key)
+    if session_data:
+        data = json.loads(session_data)
+        data["actions"] = data.get("actions", 0) + 1
+        await redis.set(session_key, json.dumps(data), ex=3600)
+
+    #update visitor stats
+    visitor_key = f"visitor:{client_ip}"
+    visitor_data = await redis.get(visitor_key)
+    if visitor_data:
+        visitor = json.loads(visitor_data)
+        visitor["total_actions"] = visitor.get("total_actions", 0) + 1
+        visitor[f"{event_type}_count"] = visitor.get(f"{event_type}_count", 0) + 1
+        visitor["last_action_type"] = event_type
+        visitor["last_action_time"] = time.time()
+        await redis.set(visitor_key, json.dumps(visitor))
+
+async def get_user_events(client_ip: str, redis, limit: int =20):
+    """Retrieve recent events for a user"""
+    events_key = f"events:{client_ip}"
+    raw_events = await redis.lrange(events_key, 0, limit - 1)
+
+    events = []
+    for raw in raw_events: 
+        events.append(json.loads(raw))
+    return events
     
-    def is_active(self): return time.time() < self.inactive_deadline
+#page tracking functions
+async def track_page_view(client_ip: str, page: str, referrer: str, redis):
+    """Track which pages users visit"""
+    #update session page views
+    session_key = f"session:{client_ip}"
+    session_data = await redis.get(session_key)
+
+    if session_data:
+        data = json.loads(session_data)
+        data["page_views"].append({ "page": page, "timestamp": time.time() })
+        data["last_activity"] = time.time()
+        await redis.set(session_key, json.dumps(data), ex=3600)
     
-    def heartbeat(self): self.inactive_deadline = time.time() + 30
+    #update visitor record
+    visitor_key = f"visitor:{client_ip}"
+    visitor_data = await redis.get(visitor_key)
 
-    def add_diff(self, i):
-        if i not in self.diffs: self.diffs.append(i)
+    if visitor_data:
+        visitor = json.loads(visitor_data)
 
-    def pull_diffs(self):
-        #return a copy of the diffs and clear them
-        diffs = self.diffs
-        self.diffs = []
-        return diffs
-    def set_geo(self, geo_obj, now=None):
-        self.geo = geo_obj
-        self.geo_ts = now or time.time()
+        #track page view count
+        if "pages_viewed" not in visitor:
+            visitor["pages_viewed"] = {}
+        visitor["pages_viewed"][page] = visitor["pages_viewed"].get(page, 0) + 1 
 
-    def has_recent_geo(self, now=None):
-        now = now or time.time()
-        return (self.geo is not None) and ((now - self.geo_ts) <= CLIENT_GEO_TTL)
+        #track referrers
+        if referrer and referrer != "":
+            if "referrers" not in visitor:
+                visitor["referrers"] = []
+            if referrer not in visitor["referrers"]:
+                visitor["referrers"].append(referrer)
+        
+        visitor["last_page"] = page
+        visitor["total_page_views"] = visitor.get("total_page_views", 0) + 1
+
+        await redis.set(visitor_key, json.dumps(visitor))
+    
+    print(f"[PAGE VIEW] {client_ip} viewed {page}")
+
+#Analytics helper functions
+async def get_visitor_analytics(client_ip: str, redis):
+    """ Get comprehensive analytics for a visitor"""
+    visitor_key = f"visitor:{client_ip}"
+    visitor_data = await redis.get(visitor_key)
+
+    if not visitor_data: return None
+
+    visitor = json.loads(visitor_data)
+
+    #get recent events
+    events = await get_user_events(client_ip, redis, limit=10)
+
+    #get active session info
+    session_key = f"session:{client_ip}"
+    session_data = await redis.get(session_key)
+    current_session = json.loads(session_data) if session_data else None
+
+    analytics = { "visitor": visitor, "recent_events": events, "current_session": current_session, "is_active": current_session is not None }
+    return analytics
+
+async def update_scroll_depth(client_ip: str, depth: float, redis):
+    """Update max scroll depth for current session"""
+    session_key = f"session:{client_ip}"
+    session_data = await redis.get(session_key)
+
+    if session_data:
+        data = json.loads(session_data)
+        data["scroll_depth"] = max(data.get("scroll_depth", 0), depth)
+        await redis.set(session_key, json.dumps(data), ex=3600)
+
+
+def parse_referrer(referrer: str) -> Dict[str, Any]:
+    """Parse referrer URL to extract useful information"""
+    if not referrer or referrer == "direct":
+        return {
+            "source": "Direct",
+            "domain": None,
+            "full_url": None,
+            "type": "direct"
+        }
+    
+    referrer_lower = referrer.lower()
+    
+    # Social media detection
+    social_platforms = {
+        "facebook.com": "Facebook",
+        "fb.com": "Facebook",
+        "twitter.com": "Twitter/X",
+        "t.co": "Twitter/X",
+        "x.com": "Twitter/X",
+        "instagram.com": "Instagram",
+        "linkedin.com": "LinkedIn",
+        "reddit.com": "Reddit",
+        "pinterest.com": "Pinterest",
+        "tiktok.com": "TikTok",
+        "youtube.com": "YouTube",
+        "discord.com": "Discord",
+        "snapchat.com": "Snapchat",
+        "whatsapp.com": "WhatsApp",
+        "telegram.org": "Telegram",
+    }
+    
+    # Search engines
+    search_engines = {
+        "google.com": "Google Search",
+        "bing.com": "Bing Search",
+        "yahoo.com": "Yahoo Search",
+        "duckduckgo.com": "DuckDuckGo",
+        "baidu.com": "Baidu",
+        "yandex.com": "Yandex",
+        "ask.com": "Ask.com",
+    }
+    
+    # Extract domain from referrer
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(referrer)
+        domain = parsed.netloc or parsed.path.split('/')[0]
+        domain = domain.replace('www.', '')
+        
+        # Check if it's social media
+        for social_domain, social_name in social_platforms.items():
+            if social_domain in referrer_lower:
+                return {
+                    "source": social_name,
+                    "domain": domain,
+                    "full_url": referrer[:200],  # Limit length
+                    "type": "social"
+                }
+        
+        # Check if it's a search engine
+        for search_domain, search_name in search_engines.items():
+            if search_domain in referrer_lower:
+                return {
+                    "source": search_name,
+                    "domain": domain,
+                    "full_url": referrer[:200],
+                    "type": "search"
+                }
+        
+        # Regular website referral
+        return {
+            "source": domain,
+            "domain": domain,
+            "full_url": referrer[:200],
+            "type": "referral"
+        }
+    except:
+        return {
+            "source": "Unknown",
+            "domain": None,
+            "full_url": referrer[:200],
+            "type": "unknown"
+        }
+
+async def track_referrer(client_ip: str, referrer: str, redis):
+    """Track and store referrer information"""
+    if not referrer:
+        referrer = "direct"
+    
+    parsed_ref = parse_referrer(referrer)
+    
+    # Update visitor record
+    visitor_key = f"visitor:{client_ip}"
+    visitor_data = await redis.get(visitor_key)
+    
+    if visitor_data:
+        visitor = json.loads(visitor_data)
+        
+        # Store first referrer (acquisition source)
+        if "first_referrer" not in visitor:
+            visitor["first_referrer"] = parsed_ref
+            visitor["first_referrer_time"] = time.time()
+        
+        # Store last referrer
+        visitor["last_referrer"] = parsed_ref
+        visitor["last_referrer_time"] = time.time()
+        
+        # Track all unique referrer sources
+        if "all_referrers" not in visitor:
+            visitor["all_referrers"] = []
+        
+        # Add to list if not already there (keep unique)
+        ref_entry = {
+            "source": parsed_ref["source"],
+            "type": parsed_ref["type"],
+            "timestamp": time.time()
+        }
+        
+        # Only add if source is different from last one
+        if not visitor["all_referrers"] or visitor["all_referrers"][-1]["source"] != parsed_ref["source"]:
+            visitor["all_referrers"].append(ref_entry)
+            # Keep only last 20 referrers
+            visitor["all_referrers"] = visitor["all_referrers"][-20:]
+        
+        await redis.set(visitor_key, json.dumps(visitor))
+        print(f"[REFERRER] {client_ip} came from {parsed_ref['source']} ({parsed_ref['type']})")
+    
+    # Track global referrer stats
+    ref_stats_key = f"referrer_stats:{parsed_ref['source']}"
+    await redis.incr(ref_stats_key)
+    
+    # Track referrer by type
+    ref_type_key = f"referrer_type:{parsed_ref['type']}"
+    await redis.incr(ref_type_key)
+
+async def get_referrer_stats(redis, limit: int = 20):
+    """Get top referrer sources"""
+    # Get all referrer stat keys
+    keys = await redis.keys("referrer_stats:*")
+    
+    referrer_counts = []
+    for key in keys:
+        key_str = key.decode('utf-8') if isinstance(key, bytes) else key
+        source = key_str.replace("referrer_stats:", "")
+        count = await redis.get(key)
+        count = int(count) if count else 0
+        
+        if count > 0:
+            referrer_counts.append({"source": source, "count": count})
+    
+    # Sort by count
+    referrer_counts.sort(key=lambda x: x["count"], reverse=True)
+    
+    return referrer_counts[:limit]
+
+async def get_referrer_type_stats(redis):
+    """Get breakdown by referrer type"""
+    types = ["direct", "social", "search", "referral", "unknown"]
+    type_stats = {}
+    
+    for ref_type in types:
+        key = f"referrer_type:{ref_type}"
+        count = await redis.get(key)
+        type_stats[ref_type] = int(count) if count else 0
+    
+    return type_stats
+
 
 def utc_to_local(timestamp):
     utc_dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
@@ -54,10 +363,53 @@ async def init_sqlite_db():
         await db.execute("""
             CREATE TABLE IF NOT EXISTS visitors (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, device TEXT, user_agent TEXT, classification TEXT, usage_type TEXT, isp TEXT, city TEXT,
-                zip TEXT, is_vpn INTEGER, country TEXT, timestamp REAL , visit_count INTEGER, last_updated REAL )""")
+                zip TEXT, is_vpn INTEGER, country TEXT, timestamp REAL , visit_count INTEGER, last_updated REAL)""")
+                         
+                # total_time_spent REAL DEFAULT 0, last_session_duration REAL DEFAULT 0, total_sessions INTEGER DEFAULT 0, avg_session_duration REAL DEFAULT 0,
+                # total_actions INTEGER DEFAULT 0, total_page_views INTEGER DEFAULT 0, last_page TEXT, last_action_type TEXT, last_action_time REAL ,
+                # first_referrer_source TEXT, first_referrer_type TEXT, last_referrer_source TEXT, last_referrer_source TEXT, last_referrer_type TEXT)""")
+        
+        
+        # Migration: Add new columns if they don't exist
+        # This is safe to run multiple times - it will only add columns that are missing
+        
+        # Check which columns exist
+        cursor = await db.execute("PRAGMA table_info(visitors)")
+        columns = await cursor.fetchall()
+        existing_columns = [col[1] for col in columns]  # col[1] is the column name
+        
+        # Add missing columns one by one
+        new_columns = {
+            "total_time_spent": "REAL DEFAULT 0",
+            "last_session_duration": "REAL DEFAULT 0",
+            "total_sessions": "INTEGER DEFAULT 0",
+            "avg_session_duration": "REAL DEFAULT 0",
+            "total_actions": "INTEGER DEFAULT 0",
+            "total_page_views": "INTEGER DEFAULT 0",
+            "last_page": "TEXT",
+            "last_action_type": "TEXT",
+            "last_action_time": "REAL",
+            "first_referrer_source": "TEXT",
+            "first_referrer_type": "TEXT",
+            "last_referrer_source": "TEXT",
+            "last_referrer_type": "TEXT"
+        }
+        
+        for column_name, column_type in new_columns.items():
+            if column_name not in existing_columns:
+                try:
+                    await db.execute(f"ALTER TABLE visitors ADD COLUMN {column_name} {column_type}")
+                    print(f"[MIGRATION] Added column: {column_name}")
+                except Exception as e:
+                    print(f"[MIGRATION] Column {column_name} might already exist: {e}")
+        
         
         await db.execute(""" 
             CREATE INDEX IF NOT EXISTS idx_timestamp ON visitors(timestamp DESC)""")
+        await db.execute( """   
+            CREATE INDEX IF NOT EXISTS idx_ip ON visitors(ip)""")
+        await db.execute(""" 
+            CREATE INDEX IF NOT EXISTS idx_referrer ON visitors(first_referrer_source)""")
         await db.commit()
         print("[SQLite] Database initialized succesfully")
 
@@ -105,18 +457,15 @@ async def restore_visitors_from_sqlite(redis):
             async with db.execute("SELECT * FROM visitors ORDER BY timestamp DESC") as cursor:
                 count = 0
             async for row in cursor:
-                entry = {   "ip": row["ip"], "device": row["device"], "user_agent": row["usage_type"], "isp": row["isp"], "city": row["city"],
+                entry = {   "ip": row["ip"], "device": row["device"], "user_agent": row["user_agent"], "isp": row["isp"], "city": row["city"],
                              "zip": row["zip"], "is_vpn": bool(row["is_vpn"]), "country": row["country"], "timestamp":row["timestamp"], "visit_count": row["visit_count"] }
-                await redis.set(f"visitor: {entry["ip"]}", json.dumps(entry))
+                await redis.set(f"visitor:{entry["ip"]}", json.dumps(entry))
                 await redis.zadd("recent_visitors_sorted", {entry["ip"]: entry["timestamp"]})
                 count += 1
-            #Restore to Redis
-            await redis.set(f"visitor: {entry['ip']}", json.dumps(entry))
-            await redis.zadd("recent_visitors_sorted", {entry['ip']: entry['timestamp']})
-            count += 1
+            
         #update total count
         await redis.set("total_visitors_count", count)
-        print(f"[SQLite] Restore {count} visitors tot Redis")
+        print(f"[SQLite] Restore {count} visitors to Redis")
         return count
 
     except Exception as e:
@@ -247,10 +596,24 @@ async def record_visitors(ip, user_agent, geo, redis):
         else: classification = "Human"
 
         visit_count = (json.loads(existing).get("visit_count", 1) + 1) if existing else 1
+
+        #get existing referrer data if visitor exists
+        first_ref_source = None
+        first_ref_type = None
+        last_ref_source = None
+        last_ref_type = None
         
+        if existing:
+            existing_data = json.loads(existing)
+            first_ref_source = existing_data.get("first_referrer", {}).get("source")
+            first_ref_type = existing_data.get("first_referrer", {}).get("type")
+            last_ref_source = existing_data.get("last_referrer", {}).get("source")
+            last_ref_type = existing_data.get("last_referrer", {}).get("type")
+
         entry = {   "ip": ip, "device" : device_str, "user_agent": user_agent[:120], "classification": classification, "usage_type": geo.get("usage_type", "Unknown"),
                     "isp": geo.get("isp") or "-", "city": geo.get("city") or geo.get("region", "Unknown"), "zip": geo.get("postal") or geo.get("zip") or "-",
-                    "is_vpn": geo.get("is_vpn", False), "country": geo.get("country") or geo.get("country_name"), "timestamp": time.time(), "visit_count" : visit_count, }
+                    "is_vpn": geo.get("is_vpn", False), "country": geo.get("country") or geo.get("country_name"), "timestamp": time.time(), "visit_count" : visit_count, 
+                    "first_referrer_source": first_ref_source, "first_referrer_type": first_ref_type, "last_referrer_source": last_ref_source, "last_referrer_type": last_ref_type,}
 
         await redis.set(visitors_key, json.dumps(entry)) #save permanently
         await redis.zadd("recent_visitors_sorted", {ip:time.time()}) #maintain a sorted set by timestamp
@@ -287,3 +650,31 @@ def get_real_ip(request):
     
     #fallback to direct client host 
     return request.client.host
+
+class Client:
+    def __init__(self):
+        self.id = str(uuid4())
+        self.diffs = []
+        self.inactive_deadline = time.time() + 30
+        self.geo = None
+        self.geo_ts = 0.0
+    
+    def is_active(self): return time.time() < self.inactive_deadline
+    
+    def heartbeat(self): self.inactive_deadline = time.time() + 30
+
+    def add_diff(self, i):
+        if i not in self.diffs: self.diffs.append(i)
+
+    def pull_diffs(self):
+        #return a copy of the diffs and clear them
+        diffs = self.diffs
+        self.diffs = []
+        return diffs
+    def set_geo(self, geo_obj, now=None):
+        self.geo = geo_obj
+        self.geo_ts = now or time.time()
+
+    def has_recent_geo(self, now=None):
+        now = now or time.time()
+        return (self.geo is not None) and ((now - self.geo_ts) <= CLIENT_GEO_TTL)
