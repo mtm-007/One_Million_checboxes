@@ -10,6 +10,9 @@ from redis.asyncio import Redis
 import datetime as dt
 import utils
 
+import logging
+from logging.handlers import RotatingFileHandler
+
 N_CHECKBOXES, VIEW_SIZE, LOAD_MORE_SIZE = 1000000, 5000, 2000
 
 checkboxes_bitmap_key= "checkboxes_bitmap"
@@ -25,6 +28,64 @@ css_path_remote = "/assets/style_v2.css"
 app = modal.App("one-million-checkboxes")
 volume = modal.Volume.from_name("redis-data-vol", create_if_missing=True)
 
+# NEW: Add logs volume
+LOGS_DIR = "/logs"
+logs_volume = modal.Volume.from_name("checkbox-app-logs", create_if_missing=True)
+
+# NEW: Global logger reference
+_logger = None
+
+# NEW: Setup logging function
+def setup_logging():
+    """Setup file and console logging + capture print statements"""
+    global _logger
+    
+    # Create logs directory if it doesn't exist
+    Path(LOGS_DIR).mkdir(parents=True, exist_ok=True)
+    
+    logger = logging.getLogger("checkbox_app")
+    logger.setLevel(logging.INFO)
+    
+    # Clear any existing handlers
+    logger.handlers = []
+    
+    # File handler with rotation (max 10MB per file, keep 5 backups)
+    file_handler = RotatingFileHandler(
+        f"{LOGS_DIR}/app.log", 
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5
+    )
+    file_handler.setFormatter(
+        logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s')
+    )
+    
+    # Console handler (for modal app logs CLI)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(
+        logging.Formatter('[%(levelname)s] %(message)s')
+    )
+    
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    _logger = logger
+    
+    # Redirect print to logger
+    import builtins
+    original_print = builtins.print
+    
+    def logged_print(*args, **kwargs):
+        """Print that also logs to file"""
+        message = " ".join(str(arg) for arg in args)
+        original_print(*args, **kwargs)
+        
+        if _logger and message.strip():
+            _logger.info(message)
+    
+    builtins.print = logged_print
+    
+    return logger
+
 app_image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("python-fasthtml==0.12.36", "httpx==0.27.0" ,"redis>=5.3.0", "pytz", "aiosqlite")
@@ -32,10 +93,16 @@ app_image = (
     .add_local_python_source("utils")# This is the key: it adds utils.py and makes it importable
     )
 
-@app.function( image = app_image, max_containers=1, volumes={"/data": volume}, timeout=3600,) #keep_warm=1,
+@app.function( image = app_image, max_containers=1, volumes={"/data": volume, LOGS_DIR: logs_volume }, timeout=3600,) #keep_warm=1,
 @modal.concurrent(max_inputs=1000)
 @modal.asgi_app()
 def web():# Start redis server locally inside the container (persisted to volume)
+    # NEW: Add these lines FIRST, before redis starts
+    logger = setup_logging()
+    logger.info("=" * 60)
+    logger.info("🚀 One Million Checkboxes App Starting")
+    logger.info("=" * 60)
+
     redis_process = subprocess.Popen(
         [   "redis-server", "--protected-mode", "no", "--bind","127.0.0.1", 
             "--port", "6379", "--dir", "/data", #store data in persistent volume
@@ -102,6 +169,8 @@ def web():# Start redis server locally inside the container (persisted to volume
         redis_process.wait()
         await volume.commit.aio()
         print("Volume committed  -data persisted")
+        await logs_volume.commit.aio()
+        print("Logs volume committed")
 
     style= open(css_path_remote, "r").read()
     app, _= fh.fast_app( on_startup=[startup_migration], on_shutdown=[on_shutdown], hdrs=[fh.Style(style)], )
@@ -126,6 +195,14 @@ def web():# Start redis server locally inside the container (persisted to volume
                 print(f"[THROUGHPUT] {rsp:.2f} req/sec over last 5s")
                 metrics_for_count["request_count"] = 0
                 metrics_for_count["last_throughput_log"] = now
+            
+            # NEW: Add this to commit logs periodically
+            if metrics_for_count["request_count"] % 100 == 0:
+                try:
+                    logs_volume.commit()
+                except:
+                    pass  # Don't fail requests if log commit fails
+                    
         return response
     
     @app.get("/restore-from-sqlite") #Manual endpoint to restore Redis from SQLite backup 
@@ -227,8 +304,10 @@ def web():# Start redis server locally inside the container (persisted to volume
     
     @app.get("/")
     async def get(request):
+        logger.info("📄 GET / - Homepage accessed")
         client_ip = utils.get_real_ip(request)
         user_agent = request.headers.get('user-agent', 'unknown')
+        logger.info(f"Homepage view | IP: {client_ip} | UA: {user_agent[:50]}")
         referrer = request.headers.get('referer', 'direct')
 
         #start session tracking
@@ -593,6 +672,7 @@ def web():# Start redis server locally inside the container (persisted to volume
     @app.post("/toggle/{i}/{client_id}")
     async def toggle(request, i:int, client_id:str):
         client_ip = utils.get_real_ip(request)
+        logger.info(f"🔘 Checkbox {i} toggled by {client_ip}")
 
         #log the checkbox toggle event
         await utils.log_event(client_ip, "checkbox_toggle", 
@@ -653,6 +733,8 @@ def web():# Start redis server locally inside the container (persisted to volume
     @app.get("/visitors")
     async def visitors_page(request, offset: int = 0, limit: int = 5, days: int= 30):#100):
         client_ip = utils.get_real_ip(request)
+        logger.info(f"👥 GET /visitors - Dashboard accessed (offset={offset}, limit={limit})")
+    
         referrer = request.headers.get('referer', '')
 
         #track this page view and referrer
@@ -865,4 +947,8 @@ def web():# Start redis server locally inside the container (persisted to volume
                 pagination_controls,
                 fh.Div(  fh.A("<- Back to checkboxes", href="/", cls="back-link"), style="text-align: center; margin-top: 30px;" ), cls="visitors-container" 
                       ))
+    
+    # NEW: Add before the return statement
+    logger.info("✅ One Million Checkboxes App initialized successfully")
+    
     return app

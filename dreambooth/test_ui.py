@@ -4,7 +4,7 @@ Dreambooth app with visitor tracking - using local Redis like the checkbox app
 from dataclasses import dataclass
 from pathlib import Path
 import modal
-import os
+import os, sys
 import fasthtml.common as fh
 import asyncio
 import subprocess
@@ -12,12 +12,82 @@ import time
 import json
 from redis.asyncio import Redis
 from datetime import datetime
+import logging
+from logging.handlers import RotatingFileHandler
+
+from datetime import datetime
 import utils
 
 # Import from your existing dreambooth_app
 from dreambooth_app import (app, image, Model, AppConfig, RESULTS_DIR, results_volume)
 
 os.environ["WANDB_PROJECT"] = "dreambooth_sdxl_app"
+
+LOGS_DIR = "/logs"
+logs_volume = modal.Volume.from_name("dreambooth-logs", create_if_missing=True)
+
+_logger = None
+
+# NEW FUNCTION
+def setup_logging():
+    """Setup file and console logging"""
+    global _logger
+    
+    # Create logs directory if it doesn't exist
+    Path(LOGS_DIR).mkdir(parents=True, exist_ok=True)
+    
+    logger = logging.getLogger("dreambooth_app")
+    logger.setLevel(logging.INFO)
+    
+    # Clear any existing handlers
+    logger.handlers = []
+    
+    # File handler with rotation (max 10MB per file, keep 5 backups)
+    file_handler = RotatingFileHandler(
+        f"{LOGS_DIR}/app.log", 
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5
+    )
+    file_handler.setFormatter(
+        logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s')
+    )
+    
+    # Console handler (for modal app logs CLI)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter( logging.Formatter('[%(levelname)s] %(message)s') )
+    
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    _logger = logger
+
+    # Redirect print to logger
+    import builtins
+    original_print = builtins.print
+    
+    def logged_print(*args, **kwargs):
+        """Print that also logs to file"""
+        # Get the message
+        message = " ".join(str(arg) for arg in args)
+        
+        # Print to console normally
+        original_print(*args, **kwargs)
+        
+        # Also log to file (without timestamp since formatter adds it)
+        if _logger and message.strip():
+            _logger.info(message)
+    
+    # Replace print globally
+    builtins.print = logged_print
+    
+    return logger
+
+# NEW HELPER FUNCTION
+def log_request(logger, request, message):
+    """Log request with IP and user agent"""
+    ip = request.client.host if hasattr(request, 'client') else 'unknown'
+    user_agent = request.headers.get('user-agent', 'unknown') if hasattr(request, 'headers') else 'unknown'
+    logger.info(f"{message} | IP: {ip} | UA: {user_agent[:50]}")
 
 assets_path = Path(__file__).parent / "assets"
 
@@ -35,11 +105,17 @@ image = (
 )
 
 @app.function(
-    image=image, max_containers=3, volumes={  RESULTS_DIR: results_volume, VISITOR_DATA_DIR: visitor_volume},  # Persist both SQLite and Redis data
+    image=image, max_containers=3, volumes={  RESULTS_DIR: results_volume, VISITOR_DATA_DIR: visitor_volume, LOGS_DIR: logs_volume},  # Persist both SQLite and Redis data
     timeout=3600 )
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app()
 def fasthtml_app():
+    #New: logging
+    logger = setup_logging()
+    logger.info("=" * 60)
+    logger.info("🚀 FastHTML App Starting") 
+    logger.info("=" * 60)
+
     redis_process = subprocess.Popen(
         [
             "redis-server", "--protected-mode", "no", "--bind", "127.0.0.1",
@@ -169,53 +245,83 @@ def fasthtml_app():
             print(f"[ERROR] Background visitor tracking failed: {e}")
 
     @app_instance.get("/")
-    def index():
+    def index(request):
+        #logging
+        logger.info("📄 GET / - Homepage accessed")
+        log_request(logger, request, "Homepage view")
         history = get_history()
         latest = history[0] if history else None
 
-        return fh.Html(
-            fh.Head(
-                fh.Title("Dreambooth on Modal"), fh.Link(rel="stylesheet", href="/assets/styles.css?v=2"),
-            ),
-            fh.Body(
-                fh.Main(
-                    fh.H1(f"Dream up and Generate Images with Flux"), fh.P("Describe what they are doing, styles, artist, etc."),
-                    fh.Form(
-                        fh.Textarea(
-                            name="prompt", placeholder=f"Describe {instance_phrase}", rows=6, cls="prompt-box", id="prompt-input"
-                        ),
-                        fh.Button("Dream", type="submit"), method="post", action="/generate",
-                    ),
-                    fh.Div(
-                        fh.H3("Try an example: "),
-                        *[
-                            fh.Button(
-                                prompt, cls="example-btn", onclick=f"document.getElementById('prompt-input').value = `{prompt}`"
-                            ) for prompt in example_prompts
-                        ], cls="examples"
-                    ),
-                    fh.H2("Latest result"),
-                    fh.Img(src=f"/image/{latest.name}") if latest else fh.P("No images yet"),
-                    fh.H2("Gallery"),
-                    fh.Div(
-                        *[fh.Img(src=f"/image/{img.name}", cls="thumb") for img in history], cls="gallery", ),
-                    # Add link to visitors page
-                    fh.Div(
-                        fh.A("📊 View Visitor Analytics", href="/visitors", 
-                             style="display:inline-block;padding:12px 24px;background:linear-gradient(135deg,#667eea,#764ba2);color:white;text-decoration:none;border-radius:8px;font-weight:600;margin-top:20px;"),
-                        style="text-align: center;"
-                    )
+        try:
+            history = get_history()
+            latest = history[0] if history else None
+            logger.info(f"📊 Gallery has {len(history)} images ")
+
+            logs_volume.commit()
+            return fh.Html(
+                fh.Head(
+                    fh.Title("Dreambooth on Modal"), fh.Link(rel="stylesheet", href="/assets/styles.css?v=2"),
                 ),
+                fh.Body(
+                    fh.Main(
+                        fh.H1(f"Dream up and Generate Images with Flux"), fh.P("Describe what they are doing, styles, artist, etc."),
+                        fh.Form(
+                            fh.Textarea(
+                                name="prompt", placeholder=f"Describe {instance_phrase}", rows=6, cls="prompt-box", id="prompt-input"
+                            ),
+                            fh.Button("Dream", type="submit"), method="post", action="/generate",
+                        ),
+                        fh.Div(
+                            fh.H3("Try an example: "),
+                            *[
+                                fh.Button(
+                                    prompt, cls="example-btn", onclick=f"document.getElementById('prompt-input').value = `{prompt}`"
+                                ) for prompt in example_prompts
+                            ], cls="examples"
+                        ),
+                        fh.H2("Latest result"),
+                        fh.Img(src=f"/image/{latest.name}") if latest else fh.P("No images yet"),
+                        fh.H2("Gallery"),
+                        fh.Div(
+                            *[fh.Img(src=f"/image/{img.name}", cls="thumb") for img in history], cls="gallery", ),
+                        # Add link to visitors page
+                        fh.Div(
+                            fh.A("📊 View Visitor Analytics", href="/visitors", 
+                                style="display:inline-block;padding:12px 24px;background:linear-gradient(135deg,#667eea,#764ba2);color:white;text-decoration:none;border-radius:8px;font-weight:600;margin-top:20px;"),
+                            style="text-align: center;"
+                        )
+                    ),
+                )
             )
-        )
+        except Exception as e:
+            logger.error(f"Error in index: {e}", exc_info=True)
+            logs_volume.commit()
+            raise
 
     @app_instance.post("/generate")
-    def generate(prompt: str = ""):
+    def generate(request, prompt: str = ""):
         if not prompt:
             prompt = f"{instance_phrase}"
-
-        Model().inference.remote(prompt, config)
-        return fh.Redirect("/")
+            logger.info(f"🎨 POST /generate - Using default prompt") 
+        else:
+            logger.info(f"🎨 POST /generate - Custom prompt: {prompt[:100]}...") 
+        
+        log_request(logger, request, "Image generation requested")
+        
+        try:
+            logger.info(f"⚙️  Starting inference for prompt: {prompt[:50]}...")  # NEW
+            Model().inference.remote(prompt, config)
+            logger.info(f"✅ Inference completed successfully")  # NEW
+            
+            # NEW: Commit logs after generation
+            logs_volume.commit()
+            
+            return fh.Redirect("/") 
+        except Exception as e:
+            # NEW: Log errors
+            logger.error(f"❌ Error during generation: {e}", exc_info=True)
+            logs_volume.commit()
+            raise
 
     @app_instance.get("/visitors")
     async def visitors_page(offset: int = 0, limit: int = 50):
@@ -346,15 +452,27 @@ def fasthtml_app():
         )
 
     @app_instance.get("/image/{name}")
-    def serve_image(name: str):
+    def serve_image(request, name: str):
+        logger.info(f" Get /image/{name}")
+        log_request(logger, request, f"Image served: {name}")
+
+        logs_volume.commit()
+
         return fh.FileResponse(Path(RESULTS_DIR) / name)
 
     @app_instance.get("/assets/{filename}")
-    def serve_asset(filename: str):
+    def serve_asset(request, filename: str):
+        logger.info(f"Get /assets/{filename}")
+
         response = fh.FileResponse(Path("/assets") / filename)
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+
+        logs_volume.commit()
         return response
+
+    logger.info("✅ FastHTML App initialized successfully") 
+    #logs_volume.commit()
 
     return app_instance

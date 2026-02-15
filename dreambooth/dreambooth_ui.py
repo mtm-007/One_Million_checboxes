@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from datetime import datetime
+import logging
+from logging.handlers import RotatingFileHandler
+
 import modal
 import os
 
@@ -10,16 +14,62 @@ from dreambooth_app import (app, image, Model, AppConfig, RESULTS_DIR, results_v
 
 os.environ["WANDB_PROJECT"] = "dreambooth_sdxl_app"
 
+LOGS_DIR = "/logs"
+logs_volume = modal.Volume.from_name("dreambooth-logs", create_if_missing=True)
+
+# NEW FUNCTION
+def setup_logging():
+    """Setup file and console logging"""
+    # Create logs directory if it doesn't exist
+    Path(LOGS_DIR).mkdir(parents=True, exist_ok=True)
+    
+    logger = logging.getLogger("dreambooth_app")
+    logger.setLevel(logging.INFO)
+    
+    # Clear any existing handlers
+    logger.handlers = []
+    
+    # File handler with rotation (max 10MB per file, keep 5 backups)
+    file_handler = RotatingFileHandler(
+        f"{LOGS_DIR}/app.log", 
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5
+    )
+    file_handler.setFormatter(
+        logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s')
+    )
+    
+    # Console handler (for modal app logs CLI)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter( logging.Formatter('[%(levelname)s] %(message)s') )
+    
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+# NEW HELPER FUNCTION
+def log_request(logger, request, message):
+    """Log request with IP and user agent"""
+    ip = request.client.host if hasattr(request, 'client') else 'unknown'
+    user_agent = request.headers.get('user-agent', 'unknown') if hasattr(request, 'headers') else 'unknown'
+    logger.info(f"{message} | IP: {ip} | UA: {user_agent[:50]}")
 
 assets_path = Path(__file__).parent / "assets"
 image = (image.add_local_dir(assets_path, remote_path="/assets")
               .add_local_file("dreambooth_app.py",remote_path="/root/dreambooth_app.py"))
 
-@app.function(  image=image, max_containers=3, volumes={RESULTS_DIR: results_volume})
+@app.function(  image=image, max_containers=3, volumes={RESULTS_DIR: results_volume, LOGS_DIR: logs_volume })
 
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app()
 def fasthtml_app():
+    #New: logging
+    logger = setup_logging()
+    logger.info("=" * 60)
+    logger.info("🚀 FastHTML App Starting") 
+    logger.info("=" * 60)
+
     config = AppConfig()
     instance_phrase = f"{config.instance_name} the {config.class_name}"
 
@@ -53,54 +103,96 @@ def fasthtml_app():
     app_instance = fh.FastHTML()
 
     @app_instance.get("/")
-    def index():
-        history = get_history()
-        latest = history[0] if history else None
+    def index(request):
+        #logging
+        logger.info("📄 GET / - Homepage accessed")
+        log_request(logger, request, "Homepage view")
 
-        return fh.Html(
-            fh.Head(
-                fh.Title("Dreambooth on Modal"),
-                fh.Link(rel="stylesheet", href="/assets/styles.css?v=2"),
-            ),
-            fh.Body(
-                fh.Main(
-                    fh.H1(f"Dream up and Generate Images with Flux "),
-                    fh.P("Describe what they are doing, styles, artist, etc."),
-                    fh.Form(
-                        fh.Textarea(name="prompt", palceholder=f"Describe {instance_phrase}", rows=6, cls="prompt-box", id="prompt-input"),
-                        fh.Button("Dream", type="submit"), method="post", action="/generate",),
-                    fh.Div(fh.H3("Try an example: "),
-                           *[
-                               fh.Button( prompt, cls="example-btn", onclick=f"document.getElementById('prompt-input').value = `{prompt}`")
-                               for prompt in example_prompts
-                           ], cls="examples" 
-                    ),
+        try:
+            history = get_history()
+            latest = history[0] if history else None
+            logger.info(f"📊 Gallery has {len(history)} images ")
 
-                    fh.H2("Lastet result"), fh.Img(src=f"/image/{latest.name}") if latest else fh.P("No images yet"),
-                    fh.H2("Gallery"), fh.Div( *[ fh.Img(src=f"/image/{img.name}", cls="thumb") for img in history[:]], cls="gallery",
-                        ),
+            logs_volume.commit()
+
+            return fh.Html(
+                fh.Head(
+                    fh.Title("Dreambooth on Modal"),
+                    fh.Link(rel="stylesheet", href="/assets/styles.css?v=2"),
                 ),
-            )
-        )
+                fh.Body(
+                    fh.Main(
+                        fh.H1(f"Dream up and Generate Images with Flux "),
+                        fh.P("Describe what they are doing, styles, artist, etc."),
+                        fh.Form(
+                            fh.Textarea(name="prompt", palceholder=f"Describe {instance_phrase}", rows=6, cls="prompt-box", id="prompt-input"),
+                            fh.Button("Dream", type="submit"), method="post", action="/generate",),
+                        fh.Div(fh.H3("Try an example: "),
+                            *[
+                                fh.Button( prompt, cls="example-btn", onclick=f"document.getElementById('prompt-input').value = `{prompt}`")
+                                for prompt in example_prompts
+                            ], cls="examples" 
+                        ),
+
+                        fh.H2("Lastet result"), fh.Img(src=f"/image/{latest.name}") if latest else fh.P("No images yet"),
+                        fh.H2("Gallery"), fh.Div( *[ fh.Img(src=f"/image/{img.name}", cls="thumb") for img in history[:]], cls="gallery",
+                            ),
+                    ),))
+        except Exception as e:
+            logger.error(f"Error in index: {e}", exc_info=True)
+            logs_volume.commit()
+            raise
 
     @app_instance.post("/generate")
-    def generate(prompt: str = ""):
-        if not prompt: prompt = f"{instance_phrase}"
-
-        Model().inference.remote(prompt, config)
-        return fh.Redirect("/") 
+    def generate(request, prompt: str = ""):
+        if not prompt: 
+            prompt = f"{instance_phrase}"
+            logger.info(f"🎨 POST /generate - Using default prompt") 
+        else:
+            logger.info(f"🎨 POST /generate - Custom prompt: {prompt[:100]}...") 
+        
+        log_request(logger, request, "Image generation requested")
+        
+        try:
+            logger.info(f"⚙️  Starting inference for prompt: {prompt[:50]}...")  # NEW
+            Model().inference.remote(prompt, config)
+            logger.info(f"✅ Inference completed successfully")  # NEW
+            
+            # NEW: Commit logs after generation
+            logs_volume.commit()
+            
+            return fh.Redirect("/") 
+        except Exception as e:
+            # NEW: Log errors
+            logger.error(f"❌ Error during generation: {e}", exc_info=True)
+            logs_volume.commit()
+            raise
     
     @app_instance.get("/image/{name}")
-    def serve_image(name: str): return fh.FileResponse(Path(RESULTS_DIR) / name)
+    def serve_image(request, name: str): 
+        logger.info(f" Get /image/{name}")
+        log_request(logger, request, f"Image served: {name}")
+
+        logs_volume.commit()
+
+        return fh.FileResponse(Path(RESULTS_DIR) / name)
 
     @app_instance.get("/assets/{filename}")
-    def serve_asset(filename: str):
+    def serve_asset(request, filename: str):
         from starlette.responses import FileResponse
+
+        logger.info(f"Get /assets/{filename}")
 
         response = fh.FileResponse(Path("/assets") / filename)
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Exipires"] = "0"
+
+        logs_volume.commit()
+
         return response
+    
+    logger.info("✅ FastHTML App initialized successfully") 
+    logs_volume.commit()
     
     return app_instance
