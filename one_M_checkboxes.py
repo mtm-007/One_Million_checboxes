@@ -205,31 +205,41 @@ def web():# Start redis server locally inside the container (persisted to volume
         return( 
             fh.Titled(f"One Million Checkboxes"),
             fh.Main(
-                # Add tracking script
                 fh.Script("""
                     const tracker = { startTime: Date.now(), lastHeartbeat: Date.now(), scrollDepth: 0,
-                        init() { this.sendHeartbeat(); setInterval(() => { this.sendHeartbeat(); }, 10000);
-                
+                        init() {
+                            this.sendHeartbeat(); setInterval(() => { this.sendHeartbeat(); }, 10000);
                             const activityEvents = ['click', 'scroll', 'keypress', 'mousemove', 'touchstart'];
-                            activityEvents.forEach(event => { document.addEventListener(event, ()=>{ this.onUserActivity(); }, { passive: true }); });
+                            activityEvents.forEach(event => { document.addEventListener(event, () => { this.onUserActivity(); }, { passive: true }); });
                             
-                            let scrollTimer; window.addEventListener('scroll', ()=>{clearTimeout(scrollTimer); scrollTimer=setTimeout(()=>{
-                                const depth = Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight))*100);
-                                this.scrollDepth = Math.max(this.scrollDepth, depth);fetch('/track-scroll', { method: 'POST',  headers: {'Content-Type': 'application/json'},
-                                    body: JSON.stringify({depth: depth})}).catch(err => console.log('Scroll tracking failed:', err));},500);});
-                            window.addEventListener('beforeunload', ()=>{this.endSession());
-                            document.addEventListener('visibilitychange', ()=>document.hidden?this.endSession():this.sendHeartbeat());
-                            window.addEventListener('pagehide', ()=>{this.endSession());},
-                        onUserActivity(){const now=Date.now(); if(now - this.lastHeartbeat > 3000)this.sendHeartbeat();},
-                        sendHeartbeat() {const duration = (Date.now() - this.startTime) / 1000;
+                            let scrollTimer; window.addEventListener('scroll', () => {
+                                clearTimeout(scrollTimer); scrollTimer = setTimeout(() => {
+                                    const depth = Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100);
+                                    this.scrollDepth = Math.max(this.scrollDepth, depth);
+                                    fetch('/track-scroll', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({depth: depth})
+                                    }).catch(err => console.log('Scroll tracking failed:', err)); }, 500); });
+                            
+                            window.addEventListener('beforeunload', () => { this.endSession(); });
+                            document.addEventListener('visibilitychange', () => {
+                                if (document.hidden) { this.endSession(); } else { this.sendHeartbeat(); } });
+                            window.addEventListener('pagehide', () => { this.endSession(); }); },
+                        
+                        onUserActivity() { const now = Date.now(); if (now - this.lastHeartbeat > 3000) { this.sendHeartbeat(); } },
+                          
+                        sendHeartbeat() { const duration = (Date.now() - this.startTime) / 1000;
                             fetch('/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({ duration: duration, timestamp: Date.now()}),keepalive: true})
-                            .catch(err => console.log('Heartbeat failed:', err));this.lastHeartbeat = Date.now();},
-                        endSession() {const duration = (Date.now() - this.startTime) / 1000;
-                            const data = JSON.stringify({ duration: duration, scrollDepth: this.scrollDepth, timestamp: Date.now() });
-                            navigator.sendBeacon?navigator.sendBeacon('/session-end', data):
-                                fetch('/session-end', {method: 'POST', headers: {'Content-Type': 'application/json'},
-                                body: data, keepalive: true}).catch(err=>console.log('Session end failed:', err));}};
+                                body: JSON.stringify({ duration: duration, timestamp: Date.now() }), keepalive: true
+                            }).catch(err => console.log('Heartbeat failed:', err)); this.lastHeartbeat = Date.now(); },
+                        
+                        endSession() { const duration = (Date.now() - this.startTime) / 1000;
+                            console.log('[TRACKER] Ending session:', duration.toFixed(1) + 's');
+                            const data = { duration: duration, scrollDepth: this.scrollDepth, timestamp: Date.now() };
+                            if (navigator.sendBeacon) { const blob = new Blob([JSON.stringify(data)], {type: 'application/json' });
+                            const sent = navigator.sendBeacon('/session-end', blob); console.log('[TRACKER] sendBeacon:',sent );
+                        
+                            } else { fetch('/session-end', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data), keepalive: true
+                                }).catch(err => console.log('Session end failed:', err));  } } };
+                    
                     tracker.init();
                 """),
                 fh.Div(NotStr("""<script data-name="BMC-Widget" data-cfasync="false" 

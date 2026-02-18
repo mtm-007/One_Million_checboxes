@@ -13,10 +13,7 @@ CLIENT_GEO_TTL = 300.0
 LOCAL_TIMEZONE = pytz.timezone("America/Chicago")
 SQLITE_DB_PATH = "/data/visitors.db"
 
-# ============================================================================
-# SHARED UI COMPONENTS (NEW - for DRY refactoring)
-# ============================================================================
-
+# ------------------SHARED UI COMPONENTS (NEW - for DRY refactoring)-----------
 def stat_card(label, value, subtitle=""):
     """Stat card - ultra compact"""
     return fh.Div(fh.Div(label, cls="stats-label"), fh.Div(value, cls="stats-number"),
@@ -92,10 +89,7 @@ def fmt_time(s):
     """Format time"""
     return f"{s:.0f}s" if s<60 else f"{s/60:.1f}m" if s<3600 else f"{s/3600:.1f}h"
 
-# ============================================================================
-# TIME ANALYTICS (NEW)
-# ============================================================================
-
+#-------- TIME ANALYTICS-----------
 async def get_time_stats(redis, lim=100):
     """Get time stats"""
     ips = await redis.zrevrange("recent_visitors_sorted", 0, lim-1)
@@ -290,7 +284,7 @@ async def get_referrer_stats(redis, limit: int = 20):
         source = key_str.replace("referrer_stats:", "")
         count = int(await redis.get(key)) if await redis.get(key) else 0
         if count > 0: referrer_counts.append({"source": source, "count": count})
-    return referrer_counts.sort(key=lambda x: x["count"], reverse=True)[:limit]
+    return sorted(referrer_counts, key=lambda x: x["count"], reverse=True)[:limit]
     
 async def get_referrer_type_stats(redis):
     """Get breakdown by referrer type"""
