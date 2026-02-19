@@ -1,7 +1,6 @@
 import time,asyncio, json,subprocess, pytz, httpx, modal
 from asyncio import Lock
 from pathlib import Path
-from uuid import uuid4
 from fasthtml.js import NotStr
 import fasthtml.common as fh
 from datetime import datetime, timezone
@@ -12,10 +11,8 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 N_CHECKBOXES, LOAD_MORE_SIZE = 1000000, 2000
-
 checkboxes_bitmap_key, checkbox_cache, clients, clients_mutex= "checkboxes_bitmap", {}, {}, Lock()
 LOCAL_TIMEZONE = pytz.timezone("America/Chicago")
-#SQLITE_DB_PATH = "/data/visitors.db"
 
 css_path_local = Path(__file__).parent / "style_v2.css"
 css_path_remote = "/assets/style_v2.css"
@@ -26,7 +23,6 @@ LOGS_DIR = "/logs"
 logs_volume = modal.Volume.from_name("checkbox-app-logs", create_if_missing=True)
 _logger = None
 
-
 def setup_logging():
     """Setup file and console logging + capture print statements"""
     global _logger
@@ -34,7 +30,6 @@ def setup_logging():
     logger = logging.getLogger("checkbox_app")
     logger.setLevel(logging.INFO)
     logger.handlers = []
-    
     # File handler with rotation (max 10MB per file, keep 5 backups)
     file_handler = RotatingFileHandler( f"{LOGS_DIR}/app.log", maxBytes=10*1024*1024, backupCount=5) # 10MB
     file_handler.setFormatter( logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
@@ -42,18 +37,14 @@ def setup_logging():
     console_handler.setFormatter( logging.Formatter('[%(levelname)s] %(message)s') )
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
-    
     _logger = logger
     import builtins
     original_print = builtins.print
-    
     def logged_print(*args, **kwargs):
         """Print that also logs to file"""
         message = " ".join(str(arg) for arg in args)
         original_print(*args, **kwargs)
-        
-        if _logger and message.strip():
-            _logger.info(message)
+        if _logger and message.strip(): _logger.info(message)
     builtins.print = logged_print
     return logger
 
@@ -76,45 +67,30 @@ def web():# Start redis server locally inside the container (persisted to volume
             "--save", "60", "1","--save", "" ] #save every minute, if 1 change, #disable all other automatic saves
         , stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL )
     time.sleep(1)
-
     redis = Redis.from_url("redis://127.0.0.1:6379")
     print("Redis server started succesfully with persistent storage")
     
     async def startup_migration():
         await utils.init_sqlite_db()
-        redis_count = await redis.get("total_visitors_count")
-        if not redis_count or int(redis_count) == 0:
+        if not (redis_count := await redis.get("total_visitors_count"))or int(redis_count) == 0:
             sqlite_count = await utils.get_visitor_count_sqlite()
-            if sqlite_count > 0:
-                print(f"[STARTUP] Redis empty, restoring {sqlite_count} visitors from SQLite...")
-        
+            if sqlite_count > 0: print(f"[STARTUP] Redis empty, restoring {sqlite_count} visitors from SQLite...")
         await redis.setbit(checkboxes_bitmap_key, N_CHECKBOXES - 1, 0)
         print("[STARTUP] Bitmap initialized/verified,... Migration check complete")
        
     async def get_checkbox_range_cached(start_idx: int, end_idx:int):
         """ Load a specific range of chekcboxes, with caching"""
-        cached_values ,missing_indices = [], []
-        for i in range(start_idx, end_idx):
-            if i in checkbox_cache: cached_values.append((i, checkbox_cache[i]))
-            else: missing_indices.append(i)
-        
-        if missing_indices:
-            pipe = redis.pipeline() #use pipeline for batch loading
-            for idx in missing_indices: pipe.getbit(checkboxes_bitmap_key, idx)
-            results = await pipe.execute()
-            for idx, result in zip(missing_indices, results):
-                value = bool(result) #json.loads(result) if result is not None else False
-                checkbox_cache[idx] = value
-                cached_values.append((idx, value))
-
-        cached_values.sort(key=lambda x:x[0])  #sort by index to maintain order
-        return [v for _, v in cached_values]
+        missing = [i for i in range(start_idx, end_idx) if i not in checkbox_cache]
+        if missing:
+            pipe = redis.pipeline()
+            for idx in missing: pipe.getbit(checkboxes_bitmap_key, idx)
+            for idx, res in zip(missing, await pipe.execute()): checkbox_cache[idx] = bool(res)
+        return [checkbox_cache[i] for i in range(start_idx, end_idx)]
          
     async def get_status():
         """ Get checked/unchecked counts - use redis directly, not cache"""
         checked = await redis.bitcount(checkboxes_bitmap_key)
-        unchecked = N_CHECKBOXES - checked
-        return checked,unchecked
+        return checked,N_CHECKBOXES - checked
 
     async def on_shutdown():
         print("Shutting down... Saving Redis data")
@@ -130,18 +106,17 @@ def web():# Start redis server locally inside the container (persisted to volume
         print("Logs and Volume committed -data persisted")
 
     style= open(css_path_remote, "r").read()
-    app, _= fh.fast_app( on_startup=[startup_migration], on_shutdown=[on_shutdown], hdrs=[fh.Style(style)], )
+    web_app, _= fh.fast_app( on_startup=[startup_migration], on_shutdown=[on_shutdown], hdrs=[fh.Style(style)], )
 
     metrics_for_count = { "request_count" : 0,  "last_throughput_log" : time.time() }
     throughput_lock = asyncio.Lock()
 
-    @app.middleware("http")#ASGI Middleware for latency + throughput logging
+    @web_app.middleware("http")#ASGI Middleware for latency + throughput logging
     async def metrics_middleware(request, call_next):
         start = time.time()
         response = await call_next(request)
         duration = (time.time() - start) * 1000 #ms
         print(f"[Latency] {request.url.path} -> {duration:.2f} ms")
-
         async with throughput_lock:
             metrics_for_count["request_count"] +=1
             now = time.time()
@@ -157,33 +132,30 @@ def web():# Start redis server locally inside the container (persisted to volume
                 except: pass  # Don't fail requests if log commit fails
         return response
     
-    @app.get("/stats")
+    @web_app.get("/stats")
     async def stats():
         checked, unchecked = await get_status()
         print(f"[STATS] Checked: {checked:,}, Unchecked: {unchecked:,}")
         return fh.Div(  fh.Span(f"{checked:,}", cls="status-checked"), " checked • ",
                         fh.Span(f"{unchecked:,}",cls="status-unchecked"), " unchecked", cls="stats", id="stats", hx_get="every 2s", hx_swap="outerHTML")
     
-    @app.get("/chunk/{client_id}/{offset}")
+    @web_app.get("/chunk/{client_id}/{offset}")
     async def chunk(client_id:str, offset:int):
         return fh.NotStr(await _render_chunk(client_id,offset) )
          
     async def _render_chunk(client_id:str, offset:int)->str:
-        start_idx = offset
-        end_idx = min(offset + LOAD_MORE_SIZE, N_CHECKBOXES)
+        start_idx, end_idx = offset, min(offset + LOAD_MORE_SIZE, N_CHECKBOXES)
         print(f"[CHUNK] Loading {start_idx:,}-{end_idx:,} for {client_id[:8]}")
         checked_values = await get_checkbox_range_cached(start_idx, end_idx)
-
         parts =[f'<input type="checkbox" id="cb-{i}" class="cb" {"checked" if is_checked else ''} '
                 f'hx-post="/toggle/{i}/{client_id}" hx-swap="none">' 
                 for i, is_checked in enumerate(checked_values, start=start_idx)]
-        
         if end_idx < N_CHECKBOXES:
             parts.append( f'<span class="lazy-trigger" hx-get="/chunk/{client_id}/{end_idx}" '
                           f'hx-trigger="intersect once" hx-target="#grid-container" hx-swap="beforeend"></span>' )
         return "".join(parts)
     
-    @app.get("/")
+    @web_app.get("/")
     async def get(request):
         logger.info("📄 GET / - Homepage accessed")
         client_ip = utils.get_real_ip(request)
@@ -201,7 +173,6 @@ def web():# Start redis server locally inside the container (persisted to volume
         checked, unchecked = await get_status()
         await utils.record_visitors(client_ip,user_agent, await utils.get_geo(client_ip, redis), redis)
         first_chunk_html= await _render_chunk(client.id, offset=0)
-
         return( 
             fh.Titled(f"One Million Checkboxes"),
             fh.Main(
@@ -211,37 +182,29 @@ def web():# Start redis server locally inside the container (persisted to volume
                             this.sendHeartbeat(); setInterval(() => { this.sendHeartbeat(); }, 10000);
                             const activityEvents = ['click', 'scroll', 'keypress', 'mousemove', 'touchstart'];
                             activityEvents.forEach(event => { document.addEventListener(event, () => { this.onUserActivity(); }, { passive: true }); });
-                            
                             let scrollTimer; window.addEventListener('scroll', () => {
                                 clearTimeout(scrollTimer); scrollTimer = setTimeout(() => {
                                     const depth = Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100);
                                     this.scrollDepth = Math.max(this.scrollDepth, depth);
                                     fetch('/track-scroll', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({depth: depth})
                                     }).catch(err => console.log('Scroll tracking failed:', err)); }, 500); });
-                            
                             window.addEventListener('beforeunload', () => { this.endSession(); });
                             document.addEventListener('visibilitychange', () => {
                                 if (document.hidden) { this.endSession(); } else { this.sendHeartbeat(); } });
                             window.addEventListener('pagehide', () => { this.endSession(); }); },
-                        
-                        onUserActivity() { const now = Date.now(); if (now - this.lastHeartbeat > 3000) { this.sendHeartbeat(); } },
-                          
+                        onUserActivity() { const now = Date.now(); if (now - this.lastHeartbeat > 3000) { this.sendHeartbeat(); } },  
                         sendHeartbeat() { const duration = (Date.now() - this.startTime) / 1000;
                             fetch('/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'},
                                 body: JSON.stringify({ duration: duration, timestamp: Date.now() }), keepalive: true
                             }).catch(err => console.log('Heartbeat failed:', err)); this.lastHeartbeat = Date.now(); },
-                        
                         endSession() { const duration = (Date.now() - this.startTime) / 1000;
                             console.log('[TRACKER] Ending session:', duration.toFixed(1) + 's');
                             const data = { duration: duration, scrollDepth: this.scrollDepth, timestamp: Date.now() };
                             if (navigator.sendBeacon) { const blob = new Blob([JSON.stringify(data)], {type: 'application/json' });
                             const sent = navigator.sendBeacon('/session-end', blob); console.log('[TRACKER] sendBeacon:',sent );
-                        
                             } else { fetch('/session-end', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data), keepalive: true
                                 }).catch(err => console.log('Session end failed:', err));  } } };
-                    
-                    tracker.init();
-                """),
+                tracker.init(); """),
                 fh.Div(NotStr("""<script data-name="BMC-Widget" data-cfasync="false" 
                     src="https://cdnjs.buymeacoffee.com/1.0.0/widget.prod.min.js" 
                     data-id="gptagent.unlock"  data-description="Support me!" data-message="" 
@@ -254,45 +217,33 @@ def web():# Start redis server locally inside the container (persisted to volume
                         hx_get=f"/diffs/{client.id}", hx_trigger="every 500ms",hx_swap="none"),
                 fh.Div("Made with FastHTML + Redis deployed with Modal", cls="footer"), cls="container"))
 
-    @app.post("/heartbeat")
+    @web_app.post("/heartbeat")
     async def heartbeat(request):
         """Track that user is still active and update duration"""
         client_ip = utils.get_real_ip(request)
         try:
             data = await request.json()
             duration = data.get("duration", 0)  # Duration in seconds from frontend
-        except:
-            duration = 0
-        
+        except: duration = 0
         await utils.update_session_activity(client_ip, redis)
-        if duration > 0:            
-            if (visitor_data:=await redis.get(f"visitor:{client_ip}")):
+        if duration > 0 and (visitor_data:=await redis.get(f"visitor:{client_ip}")):
                 visitor = json.loads(visitor_data)
                 visitor["current_session_duration"] = duration
                 visitor["last_activity_time"] = time.time()
                 await redis.set(f"visitor:{client_ip}", json.dumps(visitor) )
         return {"status": "ok", "duration": duration}
-
     
-    @app.post("/track-scroll")
+    @web_app.post("/track-scroll")
     async def track_scroll(request):
-        """ Track scroll depth"""
-        client_ip = utils.get_real_ip(request)
-        data = await request.json()
-        depth = data.get("depth", 0)
-        await utils.update_scroll_depth(client_ip, depth, redis)
+        await utils.update_scroll_depth(utils.get_real_ip(request), (await request.json()).get("depth", 0), redis)
         return {"status": "ok"}
     
-    @app.post("/session-end")
+    @web_app.post("/session-end")
     async def session_end(request):
         """End session and save final time spent"""
         client_ip = utils.get_real_ip(request)
-        try:
-            data = await request.json()
-            duration = data.get("duration", 0)  # Duration in seconds from frontend
-        except:
-            duration = 0
-    
+        try: duration = (await request.json()).get("duration", 0)  # Duration in seconds from frontend
+        except: duration = 0
         if visitor_data := await redis.get(f"visitor:{client_ip}"):
             visitor = json.loads(visitor_data)
             visitor["total_time_spent"] = visitor.get("total_time_spent", 0) + duration
@@ -306,53 +257,55 @@ def web():# Start redis server locally inside the container (persisted to volume
         await redis.delete(f"session:{client_ip}")
         return {"status": "ok", "duration": duration}
 
-    @app.get("/referrer-stats")
+    @web_app.post("/toggle/{i}/{client_id}")
+    async def toggle(request, i: int, client_id: str):
+        client_ip = utils.get_real_ip(request)
+        await utils.log_event(client_ip, "checkbox_toggle", {"checkbox_id": i, "client_id": client_id, "timestamp": time.time()}, redis)
+        async with clients_mutex:
+            current = checkbox_cache.get(i, bool(await redis.getbit(checkboxes_bitmap_key, i)))
+            new_val = not current; checkbox_cache[i] = new_val
+            try:
+                await redis.setbit(checkboxes_bitmap_key, i, 1 if new_val else 0)
+                print(f"[TOGGLE] {i}: {current} -> {new_val}")
+            except Exception as e: print(f"[TOGGLE ERROR] {e}")
+            expired = [cid for cid, cl in clients.items() if cid != client_id and (not cl.is_active() or (lambda: cl.add_diff(i) or False)())]
+            for cid in expired: del clients[cid]
+        c, u = await get_status()
+        return fh.Div(fh.Span(f"{c:,}", cls="status-checked"), " checked • ", fh.Span(f"{u:,}", cls="status-unchecked"),
+                      " unchecked", cls="stats", id="stats", hx_get="/stats", hx_trigger="every 1s", hx_swap="outerHTML", hx_swap_oob="true")
+
+    @web_app.get("/diffs/{client_id}") #clients polling for outstanding diffs
+    async def diffs(request, client_id:str):
+        async with clients_mutex:
+            client = clients.get(client_id, None)
+            if client is None or len(client.diffs) == 0: return ""
+            client.heartbeat()
+            diffs_list = client.pull_diffs()
+        return [fh.Input(type="checkbox", id=f"cb-{i}", checked = bool(await redis.getbit(checkboxes_bitmap_key, i)), 
+                         hx_post=f"/toggle/{i}/{client_id}", hx_swap="none", hx_swap_oob="true", cls= "cb" ) for i in diffs_list ]
+      
+    @web_app.get("/referrer-stats")
     async def referrer_stats_page(request):
-        """Show referrer/traffic source analytics"""
-        top_referrers, type_stats = await utils.get_referrer_stats(redis, limit=30),await utils.get_referrer_type_stats(redis)
-        total_visitors = sum(type_stats.values())
-        
-        type_chart_bars = []
-        type_colors = { "direct": "#667eea", "social": "#ff6b6b", "search": "#4ecdc4", "referral": "#45b7d1", "unknown": "#95a5a6" }
-        
-        for ref_type, count in type_stats.items():
-            if total_visitors > 0:
-                percentage = (count / total_visitors) * 100
-                type_chart_bars.append(
-                    fh.Div( fh.Span(ref_type.title(), cls="bar-label-horizontal"),
-                        fh.Div( fh.Div(fh.Span(f"{count} ({percentage:.1f}%)", style="color: white; font-size: 0.9em; padding-left: 8px;"
-                                ) if count > 0 else "", style=f"width: {max(percentage, 2)}%; background: {type_colors.get(ref_type, '#999')};",
-                                cls="bar-fill-horizontal"), cls="bar-track-horizontal" ), cls="bar-horizontal" ))
+        top_refs = await utils.get_referrer_stats(redis, limit=30)
+        type_stats = await utils.get_referrer_type_stats(redis)
+        total = sum(type_stats.values())
+        COLORS = {"direct":"#667eea","social":"#ff6b6b","search":"#4ecdc4","referral":"#45b7d1","unknown":"#95a5a6"}
+        type_bars = [utils.h_bar(t.title(), cnt, total, COLORS.get(t,"#999")) for t, cnt in type_stats.items() if total]
+        ref_rows = [fh.Tr(fh.Td(f"#{i}"), fh.Td(f"{'🔍' if 'Google' in r['source'] else '📱' if any(s in r['source'] for s in ['Facebook','Twitter','Reddit']) else '🔗' if r['source']=='Direct' else '🌐'} {r['source']}"),
+                          fh.Td(r["count"]), fh.Td(f"{r['count']/total*100:.1f}%" if total else "0%"), cls="visitor-row")
+                   for i, r in enumerate(top_refs, 1)]
+        return (fh.Titled("Referrer Analytics", fh.Meta(name="viewport", content="width=device-width, initial-scale=1.0")),
+                fh.Main(fh.H1("Traffic Sources & Referrers", cls="dashboard-title"),
+                    utils.stat_card("Total Tracked Visitors", f"{total:,}"),
+                    fh.Div(fh.H2("Traffic by Type", cls="section-title"),
+                           fh.Div(*type_bars if type_bars else [fh.P("No data", style="text-align:center;color:#999;")], cls="chart-bars-container")),
+                    fh.Div(fh.H2("Top Referrer Sources", cls="section-title"),
+                           fh.Table(fh.Tr(fh.Th("Rank"),fh.Th("Source"),fh.Th("Visitors"),fh.Th("Percentage")),
+                                    *(ref_rows or [fh.Tr(fh.Td("No data", colspan=4, style="text-align:center;color:#999;padding:20px;"))]),
+                                    cls="table visitors-table"), style="margin-top:30px;"),
+                    utils.nav_links(("← Back to visitors","/visitors"),("← Back to checkboxes","/")), cls="visitors-container"))
     
-        referrer_rows = []
-        for i, ref in enumerate(top_referrers, 1):
-            source ,count = ref["source"], ref["count"]
-            percentage = (count / total_visitors * 100) if total_visitors > 0 else 0
-            
-            # Add icon based on source
-            if "Google" in source: icon = "🔍"
-            elif any(social in source for social in ["Facebook", "Twitter", "Instagram", "LinkedIn", "Reddit"]): icon = "📱"
-            elif source == "Direct": icon = "🔗"
-            else: icon = "🌐"
-            
-            referrer_rows.append( fh.Tr( fh.Td(f"#{i}"), fh.Td(f"{icon} {source}"), fh.Td(count), fh.Td(f"{percentage:.1f}%"), cls="visitor-row" ))
-        
-        return (
-            fh.Titled("Referrer Analytics", fh.Meta(name="viewport", content="width=device-width, initial-scale=1.0")),
-            fh.Main( fh.H1("Traffic Sources & Referrers", cls="dashboard-title"),
-                fh.Div( fh.Div("Total Tracked Visitors", cls="stats-label"), fh.Div(f"{total_visitors:,}", cls="stats-number"), cls="stats-card" ),
-                fh.Div( fh.H2("Traffic by Type", cls="section-title"),
-                        fh.Div( fh.Div( *type_chart_bars if type_chart_bars else [ fh.P("No referrer data yet", style="text-align: center; color:#999;")]
-                            ,cls="chart-bars-container" ), cls="chart-container" ), ),
-                fh.Div( fh.H2("Top Referrer Sources", cls="section-title"),
-                    fh.Table( fh.Tr(fh.Th("Rank"), fh.Th("Source"), fh.Th("Visitors"), fh.Th("Percentage") ),
-                        *referrer_rows if referrer_rows else [ fh.Tr(fh.Td("No data yet", colspan=4, style="text-align: center; color:#999; padding: 20px;")) ], 
-                        cls="table visitors-table" ), style="margin-top: 30px;" ),
-                fh.Div( fh.A("← Back to visitors", href="/visitors", cls="back-link"),
-                    fh.A("← Back to checkboxes", href="/", cls="back-link", style="margin-left: 20px;"),
-                    style="text-align: center; margin-top: 30px;" ), cls="visitors-container" ))
-    
-    @app.get("/time-spent-stats")
+    @web_app.get("/time-spent-stats")
     async def time_spent_stats_page(request):
         logger.info("⏱️  GET /time-spent-stats")
         stats, buckets = await utils.get_time_stats(redis, 100), await utils.get_time_buckets(redis, 500)
@@ -384,50 +337,8 @@ def web():# Start redis server locally inside the container (persisted to volume
                     utils.nav_links(("← Back to visitors", "/visitors"), 
                                     ("View Referrer Stats", "/referrer-stats", "background:#4ecdc4;"),
                                     ("← Back to checkboxes", "/")), cls="visitors-container"))
-    
-    @app.post("/toggle/{i}/{client_id}")
-    async def toggle(request, i:int, client_id:str):
-        client_ip = utils.get_real_ip(request)
-        logger.info(f"🔘 Checkbox {i} toggled by {client_ip}")
-        await utils.log_event(client_ip, "checkbox_toggle",{ "checkbox_id": i, "client_id": client_id, "timestamp": time.time() }, redis)
-        
-        async with clients_mutex:
-            client = clients.get(client_id)  
-            current = checkbox_cache[i] if i in checkbox_cache else bool (await redis.getbit(checkboxes_bitmap_key, i))
-            new_value = not current
-            checkbox_cache[i] = new_value #Update cache
-            print(f"[TOGGLE] index{i}: {current} -> {new_value}")
-
-            try:
-                await redis.setbit(checkboxes_bitmap_key, i, 1 if new_value else 0)
-                bit_value = await redis.getbit(checkboxes_bitmap_key, i)
-                print(f"[TOGGLE] Verified bitmap[{i}] = {bit_value}")
-            except Exception as e: print(f"[TOGGLE ERROR] Failed to update Redis: {e}")
-
-            expired = []
-            for client in clients.values():
-                if client.id == client_id: continue
-                if not client.is_active(): expired.append(client.id) #clean up old clients
-                client.add_diff(i)#add diff to client fpr when they next poll
-            for client_id in expired: del clients[client_id]
-
-        checked, unchecked = await get_status()
-        return fh.Div(  fh.Span(f"{checked:,}", cls="status-checked"), " checked • ",  fh.Span(f"{unchecked:,}", cls="status-unchecked"),
-                        " unchecked", cls="stats", id="stats", hx_get="/stats", hx_trigger="every 1s",hx_swap="outerHTML", hx_swap_oob="true" )
-    
-    @app.get("/diffs/{client_id}") #clients polling for outstanding diffs
-    async def diffs(request, client_id:str):
-        async with clients_mutex:
-            client = clients.get(client_id, None)
-            if client is None or len(client.diffs) == 0: return ""
-            client.heartbeat()
-            diffs_list = client.pull_diffs()
-        
-        return [fh.Input(type="checkbox", id=f"cb-{i}", checked = bool(await redis.getbit(checkboxes_bitmap_key, i)), 
-                         hx_post=f"/toggle/{i}/{client_id}", hx_swap="none", hx_swap_oob="true", cls= "cb" )
-                for i in diffs_list ]
-      
-    @app.get("/visitors")
+   
+    @web_app.get("/visitors")
     async def visitors_page(request, offset: int = 0, limit: int = 5, days: int= 30):#100):
         client_ip = utils.get_real_ip(request)
         logger.info(f"👥 GET /visitors - Dashboard accessed (offset={offset}, limit={limit})")
@@ -492,7 +403,6 @@ def web():# Start redis server locally inside the container (persisted to volume
                     fh.Td(utils.utc_to_local(v["timestamp"]).strftime("%H:%M:%S")),
                     fh.Td(f"{v.get('total_time_spent',0)/60:.1f}m"), fh.Td(v.get('total_actions', 0)),
                     fh.Td(v.get('last_page', '/')[:20]), cls="visitor-row"))
-                
          # Chart data
         now_local = utils.utc_to_local(time.time())
         chart_days_data = [(date_display := (now_local.date() - dt.timedelta(days=i)).strftime("%a-%b-%d"),
@@ -525,4 +435,4 @@ def web():# Start redis server locally inside the container (persisted to volume
                     utils.nav_links(("← Back to checkboxes", "/")), cls="visitors-container"))
     
     logger.info("✅ One Million Checkboxes App initialized successfully")
-    return app
+    return web_app
