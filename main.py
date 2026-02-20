@@ -58,7 +58,7 @@ def setup_logging():
     return logger
 
 @app.function( 
-    image = app_image, max_containers=1, volumes={"/data": volume, LOGS_DIR: logs_volume }, timeout=3600,) #keep_warm=1,
+    image = app_image, max_containers=3, volumes={"/data": volume, LOGS_DIR: logs_volume }, timeout=3600,) #keep_warm=1,
 
 @modal.concurrent(max_inputs=1000)
 @modal.asgi_app()
