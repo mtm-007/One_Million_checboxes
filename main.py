@@ -28,7 +28,6 @@ app_image = (modal.Image.debian_slim(python_version="3.12")
     .apt_install("redis-server").add_local_file(css_path_local,remote_path=css_path_remote)
     .add_local_python_source("utils","geo", "config", "fasthtml_components", "persistence", "analytics") )# This is the key: it adds utils.py and makes it importable
 
-
 def setup_logging():
     """Setup file and console logging + capture print statements"""
     global _logger
@@ -114,7 +113,7 @@ def web():# Start redis server locally inside the container (persisted to volume
         return checked,N_CHECKBOXES - checked
 
     style= open(css_path_remote, "r").read()
-    #web_app, _= fh.fast_app( on_startup=[startup_migration], on_shutdown=[on_shutdown], hdrs=[fh.Style(style)], )
+    
     web_app = fh.FastHTML( on_startup=[startup_migration], on_shutdown=[on_shutdown], hdrs=[fh.Style(style)], )
     
     metrics_for_count = { "request_count" : 0,  "last_throughput_log" : time.time() }
