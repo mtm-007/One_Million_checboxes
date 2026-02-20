@@ -141,8 +141,8 @@ async def log_event(client_ip: str, event_type: str, event_data: Dict[str, Any],
         if (raw := await redis.get(key)):
             d = update(json.loads(raw)); await redis.set(key, json.dumps(d), **({"ex":3600} if "session" in key else {}))
 
-async def get_user_events(client_ip: str, redis, limit: int =20):
-    return [json.loads(raw) for raw in await redis.lrange(f"events:{client_ip}", 0, limit - 1)]
+# async def get_user_events(client_ip: str, redis, limit: int =20):
+#     return [json.loads(raw) for raw in await redis.lrange(f"events:{client_ip}", 0, limit - 1)]
 
 async def track_page_view(client_ip: str, page: str, referrer: str, redis):
     for key, updater in [

@@ -107,6 +107,7 @@ image = (
 @app.function(
     image=image, max_containers=3, volumes={  RESULTS_DIR: results_volume, VISITOR_DATA_DIR: visitor_volume, LOGS_DIR: logs_volume},  # Persist both SQLite and Redis data
     timeout=3600 )
+    
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app()
 def fasthtml_app():

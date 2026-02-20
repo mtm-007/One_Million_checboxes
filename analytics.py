@@ -112,16 +112,18 @@ async def end_session(client_ip: str, redis):
         visitor["last_session_duration"] = duration_seconds
         visitor["total_sessions"] = visitor.get("total_sessions", 0) + 1
         visitor["total_actions"] = visitor.get("total_actions", 0) + data.get("actions", 0)
+        visitor["max_scroll_depth"] = max(visitor.get("max_scroll_depth", 0), data.get("scroll_depth", 0) )
         visitor["avg_session_duration"] = visitor["total_time_spent"] / visitor["total_sessions"]
         await redis.set(f"visitor:{client_ip}", json.dumps(visitor)); await persistence.save_visitor_to_sqlite(visitor)
         print(f"[SESSION] Ended session for {client_ip}: {duration_seconds:.1f}s, {data.get('actions', 0)} actions")
-    await redis.delete(f"visitor:{client_ip}"); return duration_seconds
+    await redis.delete(f"session:{client_ip}")
+    return duration_seconds
 
 async def update_scroll_depth(client_ip: str, depth: float, redis):
     if (session_data := await redis.get(f"session:{client_ip}")):
         data = json.loads(session_data)
         data["scroll_depth"] = max(data.get("scroll_depth", 0), depth)
-        await redis.set(f"session:{client_ip}", json.dumps(data), ex=3600)
+        await redis.set(f"session:{client_ip}", json.dumps(data), ex=604800)
 
 async def get_time_stats(redis, lim=100):
     ips = await redis.zrevrange("recent_visitors_sorted", 0, lim-1)
@@ -253,6 +255,12 @@ async def handle_session_end(request, redis):
             visitor["total_sessions"] = visitor.get("total_sessions", 0) + 1
             
             if visitor["total_sessions"] > 0: visitor["avg_session_duration"] = visitor["total_time_spent"] / visitor["total_sessions"]
+
+            if (session_data := await redis.get(f"session:{client_ip}")):
+                session = json.loads(session_data)
+                visitor["total_actions"] = visitor.get("total_actions", 0) + session.get("actions", 0)
+                visitor["max_scroll_depth"] = max(visitor.get("max_scroll_depth", 0), session.get("scroll_depth", 0))
+
             await redis.set(f"visitor:{client_ip}", json.dumps(visitor))
             await persistence.save_visitor_to_sqlite(visitor)
             print(f"[SESSION END] {client_ip} spent {duration:.1f} seconds")
@@ -322,7 +330,7 @@ async def render_visitors_page(request, redis, offset: int = 0, limit: int = 5, 
                     fh.Td(v.get("city") or "-"), fh.Td(v.get("zip", "-")), fh.Td(v.get("country") or "-"),
                     fh.Td(fh.Span(f"{v.get('visit_count',1)}", cls="visit-badge")),
                     fh.Td(utc_to_local(v["timestamp"]).strftime("%H:%M:%S")),
-                    fh.Td(f"{v.get('total_time_spent',0)/60:.1f}m"), fh.Td(v.get('total_actions', 0)),
+                    fh.Td(f"{v.get('total_time_spent',0)/60:.1f}m"), fh.Td(v.get('total_actions', 0)), fh.Td(f"{v.get('max_scroll_depth', 0):.0f}%"),
                     fh.Td(v.get('last_page', '/')[:20]), cls="visitor-row"))
          # Chart data
         now_local = utc_to_local(time.time())
@@ -348,7 +356,7 @@ async def render_visitors_page(request, redis, offset: int = 0, limit: int = 5, 
                            fh.Div(fh.Table(fh.Tr(fh.Th("IP"), fh.Th("Device"), fh.Th("Security"), fh.Th("Category"), 
                                                  fh.Th("First Source"), fh.Th("Last Source"), fh.Th("ISP/Org"), 
                                                  fh.Th("City"), fh.Th("Zip"), fh.Th("Country"), fh.Th("Visits"), 
-                                                 fh.Th("Last seen"), fh.Th("Time Spent"), fh.Th("Actions"), fh.Th("Last Page")),
+                                                 fh.Th("Last seen"), fh.Th("Time Spent"), fh.Th("Actions"), fh.Th("scroll"), fh.Th("Last Page")),
                                           *table_content, cls="table visitors-table") if table_content else 
                                   fh.P("No visitors", style="text-align:center;color:#999;padding:20px;"),
                                   cls="table-wrapper", style="overflow-x:auto;-webkit-overflow-scrolling:touch;")),
@@ -361,21 +369,32 @@ TRACKER_JS= """
             this.sendHeartbeat(); setInterval(() => { this.sendHeartbeat(); }, 10000);
             const activityEvents = ['click', 'scroll', 'keypress', 'mousemove', 'touchstart'];
             activityEvents.forEach(event => { document.addEventListener(event, () => { this.onUserActivity(); }, { passive: true }); });
-            let scrollTimer; window.addEventListener('scroll', () => {
-                clearTimeout(scrollTimer); scrollTimer = setTimeout(() => {
-                    const depth = Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100);
+
+            // chunk-based scroll depth tracking
+            const TOTAL_CHUNKS = 500; // 1,000,000 / 2,000
+            let chunksLoaded = 0;
+            document.addEventListener('htmx:afterRequest', (e) => {
+                if (e.detail.pathInfo?.requestPath?.includes('/chunk/')) {
+                    chunksLoaded++;
+                    const depth = Math.round((chunksLoaded / TOTAL_CHUNKS) * 100);
                     this.scrollDepth = Math.max(this.scrollDepth, depth);
-                    fetch('/track-scroll', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({depth: depth})
-                    }).catch(err => console.log('Scroll tracking failed:', err)); }, 500); });
+                    fetch('/track-scroll', { method: 'POST', headers: {'Content-Type': 'application/json'}, 
+                        body: JSON.stringify({depth: depth}) 
+                    }).catch(err => console.log('Scroll tracking failed:', err)); } });
+
             window.addEventListener('beforeunload', () => { this.endSession(); });
+
             document.addEventListener('visibilitychange', () => {
                 if (document.hidden) { this.endSession(); } else { this.sendHeartbeat(); } });
             window.addEventListener('pagehide', () => { this.endSession(); }); },
+
         onUserActivity() { const now = Date.now(); if (now - this.lastHeartbeat > 3000) { this.sendHeartbeat(); } },  
+
         sendHeartbeat() { const duration = (Date.now() - this.startTime) / 1000;
             fetch('/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ duration: duration, timestamp: Date.now() }), keepalive: true
             }).catch(err => console.log('Heartbeat failed:', err)); this.lastHeartbeat = Date.now(); },
+
         endSession() { const duration = (Date.now() - this.startTime) / 1000;
             console.log('[TRACKER] Ending session:', duration.toFixed(1) + 's');
             const data = { duration: duration, scrollDepth: this.scrollDepth, timestamp: Date.now() };
