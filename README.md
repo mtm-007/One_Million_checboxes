@@ -27,7 +27,6 @@ Source code & deploy setup: right here in this repo!
 # One Million Checkboxes - System Architecture
 
 ## High-Level System Design
-
 ```mermaid
 graph TD
     subgraph Client_Layer["👥 CLIENT LAYER"]
@@ -112,69 +111,69 @@ graph TD
 ## Data Flow: Checkbox Toggle
 ```mermaid
 sequenceDiagram
-  participant User
-  participant Browser
-  participant FastHTML
-  participant Redis
-  participant OtherClients
-  
-  User->>Browser: Click Checkbox #42
-  Browser->>FastHTML: POST /toggle/42/{client_id}
-  FastHTML->>Redis: GETBIT checkboxes_bitmap 42
-  Redis-->>FastHTML: current_value = 0
-  FastHTML->>Redis: SETBIT checkboxes_bitmap 42 1
-  FastHTML->>FastHTML: Update local cache
-  FastHTML->>OtherClients: Add #42 to diff queues
-  FastHTML->>Redis: BITCOUNT (get stats)
-  Redis-->>FastHTML: checked_count
-  FastHTML-->>Browser: Return updated stats
-  Browser->>User: Update UI
-  
-  Note over OtherClients: Poll every 500ms
-  OtherClients->>FastHTML: GET /diffs/{client_id}
-  FastHTML-->>OtherClients: Return checkbox #42 update
-  OtherClients->>OtherClients: Update checkbox #42
+    participant User
+    participant Browser
+    participant FastHTML
+    participant Redis
+    participant OtherClients
+    
+    User->>Browser: Click Checkbox #42
+    Browser->>FastHTML: POST /toggle/42/{client_id}
+    FastHTML->>Redis: GETBIT checkboxes_bitmap 42
+    Redis-->>FastHTML: current_value = 0
+    FastHTML->>Redis: SETBIT checkboxes_bitmap 42 1
+    FastHTML->>FastHTML: Update local cache
+    FastHTML->>OtherClients: Add #42 to diff queues
+    FastHTML->>Redis: BITCOUNT (get stats)
+    Redis-->>FastHTML: checked_count
+    FastHTML-->>Browser: Return updated stats
+    Browser->>User: Update UI
+    
+    Note over OtherClients: Poll every 500ms
+    OtherClients->>FastHTML: GET /diffs/{client_id}
+    FastHTML-->>OtherClients: Return checkbox #42 update
+    OtherClients->>OtherClients: Update checkbox #42
 ```
 
 ## Data Flow: Visitor Tracking
 ```mermaid
 flowchart TD
-  Start([New Visitor]) --> GetIP[Extract IP Address<br/>CF-Connecting-IP]
-  GetIP --> CheckCache{Check Redis<br/>geo:ip}
-  
-  CheckCache -->|Cache Hit| UseCache[Use Cached Data]
-  CheckCache -->|Cache Miss| API1[Try ipwho.is]
-  
-  API1 -->|Success| SaveCache[Save to Redis Cache]
-  API1 -->|Fail| API2[Try ipapi.co]
-  
-  API2 -->|Success| SaveCache
-  API2 -->|Fail| API3[Try ip-api.com]
-  
-  API3 -->|Success| SaveCache
-  API3 -->|Fail| Fallback[Use Fallback Data]
-  
-  UseCache --> Record[Record Visitor]
-  SaveCache --> Record
-  Fallback --> Record
-  
-  Record --> CheckNew{New<br/>Visitor?}
-  CheckNew -->|Yes| IncrCount[Increment<br/>total_visitors_count]
-  CheckNew -->|No| UpdateVisit[Increment<br/>visit_count]
-  
-  IncrCount --> SaveRedis[Save to Redis<br/>visitor:ip]
-  UpdateVisit --> SaveRedis
-  
-  SaveRedis --> AddSorted[Add to Sorted Set<br/>by timestamp]
-  SaveRedis --> UpdatePageCache[Update visitors page cache<br/>ex=45s] 
-  
-  AddSorted --> End([Done])
-  
-  style Start fill:#667eea,color:#fff
-  style End fill:#48bb78,color:#fff
-  style SaveCache fill:#4299e1,color:#fff
-  style Record fill:#ed8936,color:#fff
-  style UpdatePageCache fill:#f6e05e,color:#000
+    Start([New Visitor]) --> GetIP[Extract IP Address<br/>CF-Connecting-IP]
+    GetIP --> CheckCache{Check Redis<br/>geo:ip}
+    
+    CheckCache -->|Cache Hit| UseCache[Use Cached Data]
+    CheckCache -->|Cache Miss| API1[Try ipwho.is]
+    
+    API1 -->|Success| SaveCache[Save to Redis Cache]
+    API1 -->|Fail| API2[Try ipapi.co]
+    
+    API2 -->|Success| SaveCache
+    API2 -->|Fail| API3[Try ip-api.com]
+    
+    API3 -->|Success| SaveCache
+    API3 -->|Fail| Fallback[Use Fallback Data]
+    
+    UseCache --> Record[Record Visitor]
+    SaveCache --> Record
+    Fallback --> Record
+    
+    Record --> CheckNew{New<br/>Visitor?}
+    CheckNew -->|Yes| IncrCount[Increment<br/>total_visitors_count]
+    CheckNew -->|No| UpdateVisit[Increment<br/>visit_count]
+    
+    IncrCount --> SaveRedis[Save to Redis<br/>visitor:ip]
+    UpdateVisit --> SaveRedis
+    
+    SaveRedis --> AddSorted[Add to Sorted Set<br/>by timestamp]
+    SaveRedis --> UpdatePageCache[Update visitors page cache<br/>ex=45s]
+    
+    AddSorted --> End([Done])
+    
+    style Start fill:#667eea,color:#fff
+    style End fill:#48bb78,color:#fff
+    style SaveCache fill:#4299e1,color:#fff
+    style Record fill:#ed8936,color:#fff
+    style UpdatePageCache fill:#f6e05e,color:#000
 ```
 
 ## Technology Stack
@@ -199,7 +198,7 @@ mindmap
         Bitmap 125KB
         Pub/Sub Ready
         Persistence
-        **Page Cache Layer (45s TTL) ### NEW**
+        Page Cache Layer 45s TTL
     Infrastructure
       Modal
         Serverless
@@ -220,7 +219,7 @@ mindmap
 pie title Memory Usage Comparison (Improved)
     "Bitmap (125 KB)" : 125
     "JSON List (8 MB)" : 8000
-    "Page Cache (~50–200 KB per page)" : 200 
+    "Page Cache (50-200 KB per page)" : 200
 ```
 ```mermaid
 gantt
@@ -241,12 +240,11 @@ gantt
     Check Cache        :5, 15
     Geo API Call       :crit, 15, 515
     Save to Redis      :515, 540
-    Check/Update Page Cache :540, 550 
+    Check/Update Page Cache :540, 550
     Record Visitor     :550, 565
     
     section Visitors Dashboard
-    Check Cache Hit    :0, 10 
-    Cache Hit → Fast Render :10, 80
-    Cache Miss → Full Compute :10, 3000–5000
-```
+    Check Cache        :0, 10
+    Cache Hit - Fast Render :10, 80
+    Cache Miss - Full Compute :10, 4000
 ```
