@@ -90,7 +90,7 @@ graph TD
     Bitmap -->|Persist| Disk
     Visitor -->|Persist| Disk
     GeoCache -->|Persist| Disk
-    PageCache -->|Ephemeral (optional persist)| Disk
+    PageCache -->|Ephemeral optional persist| Disk
     
     %% Styling
     classDef clientStyle fill:#667eea,stroke:#764ba2,stroke-width:2px,color:#fff
