@@ -1,6 +1,7 @@
 import json
 import time
-from typing import Dict, Any
+import hashlib
+from typing import Dict, Any, Tuple
 import persistence
 import config
 import fasthtml.common as fh
@@ -269,99 +270,167 @@ async def handle_session_end(request, redis):
 
 def utc_to_local(timestamp): return datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone(config.LOCAL_TIMEZONE)
 
-async def render_visitors_page(request, redis, offset: int = 0, limit: int = 5, days: int= 30):#100):
-        client_ip = get_real_ip(request)
-        referrer = request.headers.get('referer', '')
-        await track_page_view(client_ip, "/visitors", referrer, redis)
-        await track_referrer(client_ip, referrer, redis)
+async def get_cached_visitors_data( redis, offset: int, limit: int, days: int ) -> Tuple[Dict, str]:
+    cache_key = f"cache:visitors:{offset}:{limit}:{days}"
 
-        days = max(7, min(days, 30))
-        print(f"[VISITORS] Loading visitors dashboard: offset={offset}, limit={limit}, window={days}")
-        recent_ips = await redis.zrange("recent_visitors_sorted", offset, offset + limit - 1, desc=True)
-        print(f"[VISITORS] Found {len(recent_ips)} IPs in sorted set")
+    cached = await redis.get(cache_key)
+    if cached:
+        try: return json.loads(cached), "cache-hit"
+        except: await redis.delete(cache_key)
 
-        visitors = []
-        for ip in recent_ips:
-            ip_str = ip.decode('utf-8') if isinstance(ip, bytes) else str(ip)
-            if (visitors_raw := await redis.get(f"visitor:{ip_str}")):
-                v = json.loads(visitors_raw)
+    # Real computation
+    recent_ips = await redis.zrange("recent_visitors_sorted", offset, offset + limit - 1, desc=True)
+    print(f"[VISITORS] Found {len(recent_ips)} IPs")
+
+    visitors = []
+    for ip_bytes in recent_ips:
+        ip_str = ip_bytes.decode('utf-8') if isinstance(ip_bytes, bytes) else str(ip_bytes)
+        raw = await redis.get(f"visitor:{ip_str}")
+        if raw:
+            try:
+                v = json.loads(raw.decode('utf-8') if isinstance(raw, bytes) else raw)
                 v["timestamp"] = float(v.get("timestamp", time.time()))
                 visitors.append(v)
-        print(f"[VISITORS] Loaded {len(visitors)} visitor records")
+            except Exception as e: print(f"[VISITORS] JSON error for {ip_str}: {e}")
 
-        total_in_db = await redis.zcard("recent_visitors_sorted")
-        total_count = int(tv) if( tv := await redis.get("total_visitors_count")) else 0
-        print(f"[VISITORS] Total unique visitors: {total_count}, in DB: {total_in_db}")
+    print(f"[VISITORS] Loaded {len(visitors)} records")
 
-        #group visitors by day for the table
-        visitors_by_day = {}
-        for v in visitors:
-            day = utc_to_local(v["timestamp"]).strftime("%Y-%m-%d")
-            if day not in visitors_by_day:
-                visitors_by_day[day] = []
-            visitors_by_day[day].append(v)
+    total_in_db = await redis.zcard("recent_visitors_sorted")
+    total_count_raw = await redis.get("total_visitors_count")
+    total_count = int(total_count_raw) if total_count_raw else 0
+    print(f"[VISITORS] Total: {total_count}, DB: {total_in_db}")
+
+    # Group by day
+    visitors_by_day = {}
+    for v in visitors:
+        day = utc_to_local(v["timestamp"]).strftime("%Y-%m-%d")
+        visitors_by_day.setdefault(day, []).append(v)
+
+    # Chart data
+    now_local = utc_to_local(time.time())
+    chart_days_data = []
+    for i in range(days - 1, -1, -1):
+        target_date = (now_local.date() - dt.timedelta(days=i)).strftime("%Y-%m-%d")
+        count = sum(1 for v in visitors if utc_to_local(v["timestamp"]).strftime("%Y-%m-%d") == target_date)
+        date_display = (now_local.date() - dt.timedelta(days=i)).strftime("%a-%b-%d")
+        chart_days_data.append((date_display, count))
+
+    # Extra stats
+    humans = sum(1 for v in visitors if "Human" in v.get("classification", ""))
+    bots = len(visitors) - humans
+    vpn_users = sum(1 for v in visitors if v.get("is_vpn", False))
+
+    result = { "total_count": total_count, "total_in_db": total_in_db, "visitors_by_day": visitors_by_day, "chart_days_data": chart_days_data,
+               "visitor_count": len(visitors), "stats": {"humans": humans, "bots": bots, "vpn_users": vpn_users}, }
+    await redis.set(cache_key, json.dumps(result), ex=45)
+    return result, "cache-miss"
+
+async def render_visitors_page(request, redis, offset: int = 0, limit: int = 5, days: int = 30):
+    client_ip = get_real_ip(request)
+    referrer = request.headers.get('referer', '')
+
+    await track_page_view(client_ip, "/visitors", referrer, redis)
+    await track_referrer(client_ip, referrer, redis)
+
+    days = max(7, min(days, 30))
+    print(f"[VISITORS] Loading dashboard: offset={offset}, limit={limit}, window={days}")
+
+    data, cache_status = await get_cached_visitors_data(redis, offset, limit, days)
+    print(f"[VISITORS] {cache_status.upper()} - {data['visitor_count']} visitors")
+
+    total_count = data["total_count"]
+    total_in_db = data["total_in_db"]
+    visitors_by_day = data["visitors_by_day"]
+    chart_days_data = data["chart_days_data"]
+    stats = data["stats"]
+
+    # ─── Raw HTML table ───────────────────────────────────────────
+    table_rows = []
+    for day_key in sorted(visitors_by_day.keys(), reverse=True):
+        day_visitors = visitors_by_day[day_key]
+        day_display = datetime.strptime(day_key, "%Y-%m-%d").strftime("%A, %B %d, %Y")
+        count = len(day_visitors)
+
+        table_rows.append(  f'<tr class="day-separator"><td colspan="15">'
+                            f'<div style="padding:10px 0;">'
+                            f'<strong>{day_display}</strong>'
+                            f'<span style="color:#667eea;margin-left:10px;"> ({count} visitor{"s" if count != 1 else ""})</span>'
+                            f'</div></td></tr>' )
+
+        for v in day_visitors:
+            is_vpn = v.get("is_vpn", False)
+            is_relay = "Relay" in v.get("classification", "")
+            c = v.get("classification", "Human")
+            first_ref = v.get("first_referrer", {})
+            last_ref = v.get("last_referrer", {})
     
-        #Create table rows grouped by day
-        table_content = []
-        for day_key in sorted(visitors_by_day.keys(), reverse=True):
-            day_visitors = visitors_by_day[day_key]
-            day_display = datetime.strptime(day_key, "%Y-%m-%d").strftime("%A, %B %d, %Y")
-            visitor_count = len(day_visitors)
+            row = ( '<tr class="visitor-row">'
+                    f'<td data-label="Time">{utc_to_local(v["timestamp"]).strftime("%m/%d %H:%M")}</td>'
+                    f'<td data-label="IP">{v.get("ip", "-")}</td>'
+                    f'<td data-label="Device">{v.get("device", "?")}</td>'
+                    f'<td data-label="Security">{fasthtml_components.sec_badge(is_vpn, is_relay)}</td>'
+                    f'<td data-label="Category">'
+                    f'<div><div style="font-weight:bold;color:{"#ff9500" if "Bot" in c else "#007aff"};">{c}</div>'
+                    f'<div style="font-size:0.8em;opacity:0.7;">{v.get("usage_type", "Residential")}</div></div></td>'
+                    f'<td data-label="First Source">{fasthtml_components.ref_badge(first_ref.get("source", "Direct"), first_ref.get("type", "direct"))}</td>'
+                    f'<td data-label="Last Source">{fasthtml_components.ref_badge(last_ref.get("source", "Direct"), last_ref.get("type", "direct"))}</td>'
+                    f'<td data-label="ISP/Org" style="font-size:0.85em;">{(v.get("isp") or "-")[:40]}</td>'
+                    f'<td data-label="City">{v.get("city", "-")}</td>'
+                    f'<td data-label="Zip">{v.get("zip", "-")}</td>'
+                    f'<td data-label="Country">{v.get("country", "-")}</td>'
+                    f'<td data-label="Visits"><span class="visit-badge">{v.get("visit_count", 1)}</span></td>'
+                    f'<td data-label="Last seen">{utc_to_local(v["timestamp"]).strftime("%H:%M:%S")}</td>'
+                    f'<td data-label="Time Spent">{v.get("total_time_spent", 0)/60:.1f}m</td>'
+                    f'<td data-label="Actions">{v.get("total_actions", 0)}</td>'
+                    f'<td data-label="Scroll %">{v.get("max_scroll_depth", 0):.0f}%</td>'
+                    f'<td data-label="Last Page">{v.get("last_page", "/")[:20]}</td>'
+                    '</tr>' )
+            table_rows.append(row)
 
-            table_content.append(fh.Tr( fh.Td( fh.Div(fh.Strong(day_display),
-                            fh.Span(f" ({visitor_count} visitor{'s' if visitor_count != 1 else ''})",
-                            style="color: #667eea; margin-left: 10px;"), style="padding: 10px 0;" ), colspan=10, cls="day-separator" )))
+    table_html = "".join(table_rows)
+    if not table_html:
+        table_html = '<tr><td colspan="15" style="text-align:center;padding:2rem;color:#999;">No visitors</td></tr>'
 
-            #add visitors rows for this day
-            for v in day_visitors:
-                is_vpn , is_relay= v.get("is_vpn", False), "Relay" in  v.get("classification", "")
-                first_ref, last_ref = v.get("first_referrer", {}), v.get("last_referrer", {})
-        
-                table_content.append(fh.Tr(
-                    fh.Td(v.get("ip")), fh.Td(v.get("device", "?")), fh.Td(fasthtml_components.sec_badge(is_vpn, is_relay)),
-                    fh.Td(fh.Div(fh.Div(c := v.get("classification", "Human"), 
-                                       style=f"font-weight:bold;color:{'#ff9500' if 'Bot' in c else '#007aff'};"),
-                                fh.Div(v.get("usage_type", "Residential"), style="font-size:0.8em;opacity:0.7;"))),
-                    fh.Td(fasthtml_components.ref_badge(first_ref.get("source", "Direct") if first_ref else "Direct", 
-                                         first_ref.get("type", "direct") if first_ref else "direct")),
-                    fh.Td(fasthtml_components.ref_badge(last_ref.get("source", "Direct") if last_ref else "Direct", 
-                                         last_ref.get("type", "direct") if last_ref else "direct")),
-                    fh.Td((v.get("isp") or "-")[:40], style="font-size:0.85em;"), 
-                    fh.Td(v.get("city") or "-"), fh.Td(v.get("zip", "-")), fh.Td(v.get("country") or "-"),
-                    fh.Td(fh.Span(f"{v.get('visit_count',1)}", cls="visit-badge")),
-                    fh.Td(utc_to_local(v["timestamp"]).strftime("%H:%M:%S")),
-                    fh.Td(f"{v.get('total_time_spent',0)/60:.1f}m"), fh.Td(v.get('total_actions', 0)), fh.Td(f"{v.get('max_scroll_depth', 0):.0f}%"),
-                    fh.Td(v.get('last_page', '/')[:20]), cls="visitor-row"))
-         # Chart data
-        now_local = utc_to_local(time.time())
-        chart_days_data = [(date_display := (now_local.date() - dt.timedelta(days=i)).strftime("%a-%b-%d"),
-                           sum(1 for v in visitors if utc_to_local(v["timestamp"]).strftime("%Y-%m-%d") == 
-                               (now_local.date() - dt.timedelta(days=i)).strftime("%Y-%m-%d")))
-                          for i in range(days - 1, -1, -1)]
-        
-        return (fh.Titled("Visitors Dashboard", fh.Meta(name="viewport", content="width=device-width, initial-scale=1.0, maximum-scale=5.0")),
-                fh.Main(fh.H1("Recent Visitors Dashboard", cls="dashboard-title"),
-                    fasthtml_components.stat_card("Total Unique Visitors", f"{total_count:,}", f"Database: {total_in_db:,} records"),
-                    fasthtml_components.pagination(offset, limit, total_in_db, "/visitors", {"days": days}),
-                    fh.Div(fh.H2(f"Visitors by Day - Central Time", cls="section-title", style="margin:0;"),
-                           fasthtml_components.range_sel(days, limit, offset, "/visitors"),
-                           style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:15px;"),
-                    fh.Div(fh.Div(fasthtml_components.gradient_chart(chart_days_data), cls="chart-bars-container"), cls="chart-container"),
-                    fasthtml_components.nav_links(("← Back to checkboxes", "/"), 
-                                    ("View Referrer Stats →", "/referrer-stats", "background:#4ecdc4;"),
-                                    ("View Time Stats →", "/time-spent-stats", "background:#9b59b6;")),
-                    fh.Div(fh.H2(f"Visitors Dashboard (Last {limit} Visitors)", cls="section-title"),
-                           fh.P("← Scroll horizontally to see all columns →", 
-                                style="text-align:center;color:#667eea;font-size:0.9em;margin-bottom:10px;font-weight:600;"),
-                           fh.Div(fh.Table(fh.Tr(fh.Th("IP"), fh.Th("Device"), fh.Th("Security"), fh.Th("Category"), 
-                                                 fh.Th("First Source"), fh.Th("Last Source"), fh.Th("ISP/Org"), 
-                                                 fh.Th("City"), fh.Th("Zip"), fh.Th("Country"), fh.Th("Visits"), 
-                                                 fh.Th("Last seen"), fh.Th("Time Spent"), fh.Th("Actions"), fh.Th("scroll"), fh.Th("Last Page")),
-                                          *table_content, cls="table visitors-table") if table_content else 
-                                  fh.P("No visitors", style="text-align:center;color:#999;padding:20px;"),
-                                  cls="table-wrapper", style="overflow-x:auto;-webkit-overflow-scrolling:touch;")),
-                    fasthtml_components.pagination(offset, limit, total_in_db, "/visitors", {"days": days}),
-                    fasthtml_components.nav_links(("← Back to checkboxes", "/")), cls="visitors-container"))
+    return (
+        fh.Titled("Visitors Dashboard", fh.Meta(name="viewport", content="width=device-width, initial-scale=1.0, maximum-scale=5.0")),
+        fh.Main(
+            fh.H1("Recent Visitors Dashboard", cls="dashboard-title"),
+            fh.Div(
+                fasthtml_components.stat_card("Total Visitors", f"{total_count:,}"),
+                fasthtml_components.stat_card("Humans", f"{stats['humans']:,}"),
+                fasthtml_components.stat_card("Bots", f"{stats['bots']:,}"),
+                fasthtml_components.stat_card("VPN Users", f"{stats['vpn_users']:,}"),
+                cls="stats-grid" ),
+            fasthtml_components.pagination(offset, limit, total_in_db, "/visitors", {"days": days}),
+            fh.Div( fh.H2(f"Visitors by Day - Central Time", cls="section-title", style="margin:0;"),
+                    fasthtml_components.range_sel(days, limit, offset, "/visitors"),
+                    style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:15px;"
+                ),
+            fh.Div( fh.Div(fasthtml_components.gradient_chart(chart_days_data), cls="chart-bars-container"), cls="chart-container" ),
+            fasthtml_components.nav_links(  ("← Back to checkboxes", "/"),
+                                            ("View Referrer Stats →", "/referrer-stats", "background:#4ecdc4;"),
+                                            ("View Time Stats →", "/time-spent-stats", "background:#9b59b6;")
+            ),
+            fh.Div( fh.H2(f"Visitors Dashboard (Last {limit} Visitors)", cls="section-title"),
+                    fh.P("← Scroll horizontally to see all columns →", 
+                    style="text-align:center;color:#667eea;font-size:0.9em;margin-bottom:10px;font-weight:600;"),
+                    # ← NEW: Add the hint here
+                    fh.P("← Scroll horizontally if needed (best on desktop)", cls="mobile-scroll-hint"),
+                    fh.Div( fh.NotStr(
+                                '<table class="table visitors-table">'
+                                '<thead><tr>'
+                                '<th>Time</th><th>IP</th><th>Device</th><th>Security</th><th>Category</th>'
+                                '<th>First Source</th><th>Last Source</th><th>ISP/Org</th>'
+                                '<th>City</th><th>Zip</th><th>Country</th><th>Visits</th>'
+                                '<th>Time Spent</th><th>Actions</th><th>Scroll %</th><th>Last Page</th>'
+                                '</tr></thead>'
+                                '<tbody>'
+                                f'{table_html}'
+                                '</tbody></table>' ),
+                            cls="table-wrapper", style="overflow-x:auto;-webkit-overflow-scrolling:touch;" ), cls="table-wrapper"
+                ),
+                fasthtml_components.pagination(offset, limit, total_in_db, "/visitors", {"days": days}),
+                fasthtml_components.nav_links(("← Back to checkboxes", "/")), cls="visitors-container"))
 
 TRACKER_JS= """
     const tracker = { startTime: Date.now(), lastHeartbeat: Date.now(), scrollDepth: 0,

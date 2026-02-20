@@ -124,7 +124,6 @@ h1 {
     }
 }
 
-
 /* ============================================
    VISITORS PAGE STYLES
    ============================================ */
@@ -151,6 +150,13 @@ h1 {
 }
 
 /* Stats Card */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1.5rem;
+    margin: 2rem 0;
+}
+
 .stats-card {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
@@ -353,138 +359,122 @@ h1 {
 }
 
 /* ============================================
-   STRETCHING TABLE WITH SCROLL FALLBACK
+   VISITORS TABLE - FULL WIDTH & RESPONSIVE
    ============================================ */
 
-.table-wrapper {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    margin: 20px 0;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    background: white;
-}
-
-/* Visitors Table - Stretch to fit, scroll on overflow */
-.table {
+/* Base table styles - stretch to container */
+.visitors-table {
     width: 100%;
+    table-layout: auto;
     border-collapse: collapse;
     background: white;
     border-radius: 8px;
     overflow: visible;
-    table-layout: auto;
+    font-size: 0.9rem;
 }
 
-.table th {
-    background: #667eea;
-    color: white;
-    padding: 12px 8px;
+/* Tighter padding + ellipsis for long text */
+.visitors-table th,
+.visitors-table td {
+    padding: 10px 8px;
     text-align: left;
-    font-weight: 600;
-    white-space: normal;
-    word-wrap: break-word;
-}
-
-.table td {
-    padding: 12px 8px;
-    border-bottom: 1px solid #f0f0f0;
-    color: #333;
-    white-space: normal;
-    word-wrap: break-word;
-}
-
-/* Specific column behavior - some can wrap, some should stay compact */
-.table th:nth-child(1), .table td:nth-child(1) { 
+    border-bottom: 1px solid #e5e7eb;
     white-space: nowrap;
-    min-width: 110px;
-}
-
-.table th:nth-child(2), .table td:nth-child(2) { 
-    white-space: nowrap;
-    min-width: 100px;
-}
-
-.table th:nth-child(3), .table td:nth-child(3) { 
-    white-space: nowrap;
-    min-width: 80px;
-}
-
-.table th:nth-child(4), .table td:nth-child(4) { 
-    min-width: 100px;
-    max-width: 150px;
-}
-
-.table th:nth-child(5), .table td:nth-child(5) { 
-    min-width: 100px;
-    max-width: 150px;
-}
-
-.table th:nth-child(6), .table td:nth-child(6) { 
-    min-width: 100px;
-    max-width: 150px;
-}
-
-.table th:nth-child(7), .table td:nth-child(7) { 
-    min-width: 120px;
-    max-width: 200px;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-.table th:nth-child(8), .table td:nth-child(8) { 
-    white-space: nowrap;
-    min-width: 90px;
-}
+/* Specific column widths - balance compactness and readability */
+.visitors-table th:nth-child(1), .visitors-table td:nth-child(1) { min-width: 90px; max-width: 110px; }  /* Time */
+.visitors-table th:nth-child(2), .visitors-table td:nth-child(2) { min-width: 100px; max-width: 140px; } /* IP */
+.visitors-table th:nth-child(3), .visitors-table td:nth-child(3) { min-width: 80px; max-width: 120px; }  /* Device */
+.visitors-table th:nth-child(7), .visitors-table td:nth-child(7) { min-width: 120px; max-width: 220px; } /* ISP/Org */
+.visitors-table th:nth-child(15), .visitors-table td:nth-child(15) { min-width: 80px; max-width: 180px; } /* Last Page */
 
-.table th:nth-child(9), .table td:nth-child(9) { 
-    white-space: nowrap;
-    min-width: 60px;
-}
-
-.table th:nth-child(10), .table td:nth-child(10) { 
-    white-space: nowrap;
-    min-width: 80px;
-}
-
-.table th:nth-child(11), .table td:nth-child(11) { 
-    white-space: nowrap;
-    min-width: 50px;
-    text-align: center;
-}
-
-.table th:nth-child(12), .table td:nth-child(12) { 
-    white-space: nowrap;
-    min-width: 80px;
-}
-
-.table th:nth-child(13), .table td:nth-child(13) { 
-    white-space: nowrap;
+/* Flexible columns */
+.visitors-table th:nth-child(n+8):nth-child(-n+13),
+.visitors-table td:nth-child(n+8):nth-child(-n+13) {
     min-width: 70px;
+    max-width: 160px;
 }
 
-.table th:nth-child(14), .table td:nth-child(14) { 
-    white-space: nowrap;
-    min-width: 60px;
-    text-align: center;
+/* BIG SCREENS: Full width, no scroll */
+@media (min-width: 1200px) {
+    .table-wrapper {
+        overflow-x: visible !important;
+        margin: 0;
+    }
+    
+    .visitors-table {
+        width: 100%;
+        table-layout: auto;
+    }
+    
+    .visitors-table th,
+    .visitors-table td {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        max-width: none;
+        padding: 12px 10px;
+    }
+    
+    /* Center numeric columns */
+    .visitors-table th:nth-child(11), .visitors-table td:nth-child(11),  /* Visits */
+    .visitors-table th:nth-child(12), .visitors-table td:nth-child(12),  /* Time Spent */
+    .visitors-table th:nth-child(13), .visitors-table td:nth-child(13),  /* Actions */
+    .visitors-table th:nth-child(14), .visitors-table td:nth-child(14) {  /* Scroll % */
+        text-align: center;
+    }
 }
 
-.table th:nth-child(15), .table td:nth-child(15) { 
-    min-width: 80px;
-    max-width: 120px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+/* MEDIUM SCREENS: Controlled scroll if needed */
+@media (max-width: 1199px) and (min-width: 769px) {
+    .table-wrapper {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    .visitors-table {
+        min-width: 1100px;
+    }
 }
 
-.table tr:hover {
-    background: #f5f5f5;
-    transition: background 0.2s ease;
+/* MOBILE: Scroll fallback + hint */
+@media (max-width: 768px) {
+    .table-wrapper {
+        overflow-x: auto;
+        margin: 0 -10px;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    .visitors-table {
+        min-width: 900px;
+        font-size: 0.85rem;
+    }
+    
+    .visitors-table th,
+    .visitors-table td {
+        padding: 8px 6px;
+    }
+    
+    /* Optional: Hide less critical columns on very small screens */
+    .visitors-table th:nth-child(n+9):nth-child(-n+15),
+    .visitors-table td:nth-child(n+9):nth-child(-n+15) {
+        display: none;
+    }
+    
+    .mobile-scroll-hint {
+        display: block;
+        text-align: center;
+        color: #667eea;
+        font-size: 0.9em;
+        margin: 10px 0;
+        font-weight: 600;
+    }
 }
 
-.table tr:last-child td {
-    border-bottom: none;
-}
-
-/* Day Separator in Visitors Table */
+/* Day Separator */
 .day-separator {
     background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
     border-top: 3px solid #667eea;
@@ -528,7 +518,7 @@ h1 {
 
 /* Mobile scroll hint */
 .mobile-scroll-hint {
-    display: none !important;
+    display: none;
 }
 
 /* ============================================

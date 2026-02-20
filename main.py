@@ -253,7 +253,6 @@ def web():# Start redis server locally inside the container (persisted to volume
     logger.info("✅ One Million Checkboxes App initialized successfully")
     return web_app
 
-
 class Client:
     def __init__(self):
         self.id = str(uuid4())
