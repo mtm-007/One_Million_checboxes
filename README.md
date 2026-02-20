@@ -24,10 +24,10 @@ Click any checkbox → everyone sees it update instantly.
 
 Source code & deploy setup: right here in this repo!
 
-
 # One Million Checkboxes - System Architecture
 
 ## High-Level System Design
+
 ```mermaid
 graph TD
     subgraph Client_Layer["👥 CLIENT LAYER"]
@@ -43,7 +43,7 @@ graph TD
             Routes[Routes /<br/>Handlers]
             ClientMgr[Client<br/>Manager]
             GeoAPI[Geo API<br/>Layer]
-            CacheLayer[Redis Cache Layer<br/>45s TTL for heavy pages<br>e.g. /visitors] ### NEW
+            CacheLayer[Redis Cache Layer<br/>45s TTL for heavy pages<br>e.g. /visitors]
         end
     end
     
@@ -51,7 +51,7 @@ graph TD
         Bitmap[Bitmap<br/>1M checkboxes<br/>125KB]
         Visitor[Visitor Data<br/>Hash/Sorted Set]
         GeoCache[Geolocation<br/>Cache]
-        PageCache[Page Cache<br/>visitors dashboard<br>referrer stats<br>etc.] ### NEW
+        PageCache[Page Cache<br/>visitors dashboard<br>referrer stats<br>etc.]
     end
     
     subgraph Ext_Layer["🌐 EXTERNAL APIS"]
@@ -73,14 +73,14 @@ graph TD
     FastHTML --- Routes
     FastHTML --- ClientMgr
     FastHTML --- GeoAPI
-    FastHTML --- CacheLayer ### NEW
+    FastHTML --- CacheLayer
     
     %% Components to Data Layer
     Routes -->|GETBIT/SETBIT| Bitmap
     Routes -->|BITCOUNT| Bitmap
     ClientMgr -->|Diff Queue| Visitor
     GeoAPI -->|GET/SET| GeoCache
-    CacheLayer -->|GET/SET ex=45s| PageCache ### NEW
+    CacheLayer -->|GET/SET ex=45s| PageCache
     
     %% Geo API to External
     GeoAPI -->|Fallback 1| API1
@@ -91,7 +91,7 @@ graph TD
     Bitmap -->|Persist| Disk
     Visitor -->|Persist| Disk
     GeoCache -->|Persist| Disk
-    PageCache -->|Ephemeral (optional persist)| Disk ### CHANGED
+    PageCache -->|Ephemeral (optional persist)| Disk
     
     %% Styling
     classDef clientStyle fill:#667eea,stroke:#764ba2,stroke-width:2px,color:#fff
@@ -107,10 +107,10 @@ graph TD
     class API1,API2,API3 extStyle
     class Disk storageStyle
     class CacheLayer,PageCache cacheStyle
+```
 
 ## Data Flow: Checkbox Toggle
 ```mermaid
-
 sequenceDiagram
   participant User
   participant Browser
@@ -166,7 +166,7 @@ flowchart TD
   UpdateVisit --> SaveRedis
   
   SaveRedis --> AddSorted[Add to Sorted Set<br/>by timestamp]
-  SaveRedis --> UpdatePageCache[Update visitors page cache<br/>ex=45s] ### NEW
+  SaveRedis --> UpdatePageCache[Update visitors page cache<br/>ex=45s] 
   
   AddSorted --> End([Done])
   
@@ -220,33 +220,33 @@ mindmap
 pie title Memory Usage Comparison (Improved)
     "Bitmap (125 KB)" : 125
     "JSON List (8 MB)" : 8000
-    "Page Cache (~50–200 KB per page)" : 200 ### NEW
+    "Page Cache (~50–200 KB per page)" : 200 
 ```
 ```mermaid
 gantt
-  title Request Processing Timeline (Improved)
-  dateFormat X
-  axisFormat %L ms
-  
-  section Checkbox Toggle
-  Receive Request    :0, 5
-  Get Current State  :5, 25
-  Update Redis       :25, 50
-  Update Cache       :50, 55
-  Notify Clients     :55, 65
-  Return Response    :65, 100
-  
-  section Visitor Tracking
-  Extract IP         :0, 5
-  Check Cache        :5, 15
-  Geo API Call       :crit, 15, 515
-  Save to Redis      :515, 540
-  Check/Update Page Cache :540, 550 ### NEW
-  Record Visitor     :550, 565
-  
-  section Visitors Dashboard
-  Check Cache Hit    :0, 10 ### NEW
-  Cache Hit → Fast Render :10, 80
-  Cache Miss → Full Compute :10, 3000–5000
+    title Request Processing Timeline (Improved)
+    dateFormat X
+    axisFormat %L ms
+    
+    section Checkbox Toggle
+    Receive Request    :0, 5
+    Get Current State  :5, 25
+    Update Redis       :25, 50
+    Update Cache       :50, 55
+    Notify Clients     :55, 65
+    Return Response    :65, 100
+    
+    section Visitor Tracking
+    Extract IP         :0, 5
+    Check Cache        :5, 15
+    Geo API Call       :crit, 15, 515
+    Save to Redis      :515, 540
+    Check/Update Page Cache :540, 550 
+    Record Visitor     :550, 565
+    
+    section Visitors Dashboard
+    Check Cache Hit    :0, 10 
+    Cache Hit → Fast Render :10, 80
+    Cache Miss → Full Compute :10, 3000–5000
 ```
 ```
