@@ -164,7 +164,8 @@ async def get_referrer_type_stats(redis):
                 for ref_type in ["direct", "social", "search", "referral", "unknown"]}
 
 def parse_referrer(referrer: str) -> Dict[str, Any]:
-    if not referrer or referrer == "direct": return { "source": "Direct", "domain": None, "full_url": None, "type": "direct"}
+    if not referrer or referrer == "direct": 
+        return { "source": "Direct", "domain": None, "full_url": None, "type": "direct"}
     
     try:
         from urllib.parse import urlparse
@@ -328,6 +329,9 @@ async def get_cached_visitors_data( redis, offset: int, limit: int, days: int ) 
 async def render_visitors_page(request, redis, offset: int = 0, limit: int = 5, days: int = 30):
     client_ip = get_real_ip(request)
     referrer = request.headers.get('referer', '')
+    # UTM fallback for GitHub (strips Referer header)
+    if not referrer and request.query_params.get('utm_source') == 'github':
+        referrer = 'https://github.com'
 
     await track_page_view(client_ip, "/visitors", referrer, redis)
     await track_referrer(client_ip, referrer, redis)

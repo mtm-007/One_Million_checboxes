@@ -111,7 +111,6 @@ def web():# Start redis server locally inside the container (persisted to volume
         checked = await redis.bitcount(checkboxes_bitmap_key)
         return checked,N_CHECKBOXES - checked
 
-    #style= open(css_path_remote, "r").read()
     web_app = fh.FastHTML( on_startup=[startup_migration], on_shutdown=[on_shutdown], hdrs=[fh.Style(open(css_path_remote, "r").read())], )
     
     metrics_for_count = { "request_count" : 0,  "last_throughput_log" : time.time() }

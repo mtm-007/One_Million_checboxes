@@ -10,7 +10,7 @@ BOTS = { "googlebot":"Googlebot","bingbot":"Bingbot","twitterbot":"Twitterbot","
          "duckduckbot":"DuckDuckBot","baiduspider":"Baiduspider","yandexbot":"YandexBot",
          "ia_archiver":"Alexa/Archive.org","gptbot":"ChatGPT-Bot","perplexitybot":"PerplexityAI"}
 
-social_platforms = { "facebook.com": "Facebook", "fb.com": "Facebook", "twitter.com": "Twitter/X", "t.co": "Twitter/X","snapchat.com": "Snapchat",
+social_platforms = { "facebook.com": "Facebook", "fb.com": "Facebook", "twitter.com": "Twitter/X", "t.co": "Twitter/X","snapchat.com": "Snapchat", "github.com": "GitHub",
                          "x.com": "Twitter/X", "instagram.com": "Instagram", "linkedin.com": "LinkedIn", "reddit.com": "Reddit","telegram.org": "Telegram",
                          "pinterest.com": "Pinterest",  "tiktok.com": "TikTok", "youtube.com": "YouTube", "discord.com": "Discord", "whatsapp.com": "WhatsApp" }
 
