@@ -23,8 +23,10 @@ LOGS_DIR = "/logs"
 _logger = None
 
 app_image = (modal.Image.debian_slim(python_version="3.12")
-    .pip_install("python-fasthtml==0.12.36", "httpx==0.27.0" ,"redis>=5.3.0", "pytz", "aiosqlite")
-    .apt_install("redis-server").add_local_file(css_path_local,remote_path=css_path_remote)
+    .pip_install("python-fasthtml==0.12.36", "httpx==0.27.0" ,"redis>=5.3.0", "pytz", "aiosqlite","markdown==3.10.2")
+    .apt_install("redis-server").add_local_file(css_path_local,remote_path=css_path_remote, )
+    .add_local_file("blog_post.md", remote_path="/root/blog_post.md")
+    .add_local_file("static/blog.css", remote_path="/root/static/blog.css")
     .add_local_python_source("utils","geo", "config", "fasthtml_components", "persistence", "analytics") )# This is the key: it adds utils.py and makes it importable
 
 def setup_logging():
@@ -111,7 +113,8 @@ def web():# Start redis server locally inside the container (persisted to volume
         checked = await redis.bitcount(checkboxes_bitmap_key)
         return checked,N_CHECKBOXES - checked
 
-    web_app = fh.FastHTML( on_startup=[startup_migration], on_shutdown=[on_shutdown], hdrs=[fh.Style(open(css_path_remote, "r").read())], )
+    web_app = fh.FastHTML( on_startup=[startup_migration], on_shutdown=[on_shutdown], hdrs=[fh.Style(open(css_path_remote, "r").read()),
+                                                                                            fh.Style(open("/root/static/blog.css", "r").read()),], )
     
     metrics_for_count = { "request_count" : 0,  "last_throughput_log" : time.time() }
     throughput_lock = asyncio.Lock()
@@ -242,6 +245,44 @@ def web():# Start redis server locally inside the container (persisted to volume
     @web_app.post("/session-end")
     async def session_end(request):
         return await analytics.handle_session_end(request, redis)
+
+    @web_app.get("/blog")
+    async def blog_page():
+        import markdown, re
+        with open("/root/blog_post.md", "r") as f: content = f.read()
+
+        toc_items = []
+        for line in content.split('\n'):
+            m = re.match(r'^(#{2,3}) (.+)$', line)
+            if m:
+                level = len(m.group(1))
+                title = m.group(2).strip()
+                anchor = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
+                link = fh.A(title, href=f"#{anchor}")
+                toc_items.append(fh.Li(link, style="padding-left:12px;" if level == 3 else ""))
+
+        html = markdown.markdown(content, extensions=["fenced_code", "tables", "toc"])
+        return fh.Html(
+            fh.Head(
+                fh.Title("Building One Million Checkboxes"), fh.Meta(name="viewport", content="width=device-width, initial-scale=1.0"),
+                fh.Meta(name="description", content="How I built a real-time 1M checkbox app with FastHTML, Redis, and Modal."),
+            ),
+            fh.Body( fh.Nav(fh.Div(
+                        fh.A("One Million Checkboxes 🧀", href="/", cls="blog-nav-home"),
+                        fh.Div( fh.A("Visitors", href="/visitors"), fh.A("GitHub ↗", href="https://github.com/mtm-007/one-million-checkboxes", target="_blank"),
+                                cls="blog-nav-links"  ), cls="blog-nav-inner" ), cls="blog-nav" ),
+                fh.Div(
+                    fh.Aside( fh.Div("Table of Contents", cls="blog-sidebar-title"), fh.Ul(*toc_items), cls="blog-sidebar" ),
+                    fh.Div( fh.Header(  fh.H1("Building One Million Checkboxes"),
+                            fh.Div( fh.Span("Feb 2025"), fh.Span("·", cls="meta-sep"), fh.Span("8 min read"),fh.Span("·", cls="meta-sep"),
+                                    fh.Span("FastHTML", cls="meta-tag"), fh.Span("Redis", cls="meta-tag"), fh.Span("Modal", cls="meta-tag"),
+                                    cls="blog-post-meta" ), cls="blog-post-header" ),
+                        # Markdown content
+                        fh.NotStr(f'<div class="blog-article">{html}</div>'),
+                        # Footer nav
+                        fh.Footer( fh.A("← Back to Visitors", href="/visitors"), fh.A("← Back to Checkboxes", href="/"), fh.A("View Source ↗", href="https://github.com/mtm-007/one-million-checkboxes", target="_blank"),
+                            cls="blog-footer" ), cls="blog-article-col" ),cls="blog-container"),cls="blog-page"
+            ))
    
     @web_app.get("/visitors")
     async def visitors_page(request, offset: int = 0, limit: int = 5, days: int= 30):

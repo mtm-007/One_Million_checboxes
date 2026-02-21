@@ -1,0 +1,199 @@
+/* static/blog.css – Chip Huyen style with right TOC sidebar */
+
+:root {
+    --bg: #fff;
+    --text: #000;
+    --text-secondary: #444;
+    --link: #0066cc;
+    --link-hover: #003366;
+    --border: #eee;
+    --code-bg: #f9f9f9;
+  }
+  
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0a0a;
+      --text: #e0e0e0;
+      --text-secondary: #aaa;
+      --link: #4da6ff;
+      --link-hover: #80bfff;
+      --border: #222;
+      --code-bg: #111;
+    }
+  }
+  
+  * { box-sizing: border-box; margin:0; padding:0; }
+  
+  html, body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.82;
+    font-size: 18px;
+  }
+  
+  body { padding: 0; }
+  
+  /* Top-left nav */
+  .blog-nav {
+    position: fixed;
+    top: 32px;
+    left: 5vw;
+    z-index: 100;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+  
+  .nav-name { font-weight: 700; color: var(--text); margin-right: 32px; }
+  
+  .blog-nav a {
+    color: var(--link);
+    text-decoration: none;
+    margin-right: 24px;
+  }
+  
+  .blog-nav a:hover { text-decoration: underline; }
+  
+  /* Main layout: flex container for content + sidebar */
+  .blog-layout {
+    display: flex;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 140px 40px 160px;
+    gap: 60px;
+  }
+  
+  /* Narrow content column */
+  .content-column {
+    flex: 1;
+    max-width: 720px;
+  }
+  
+  /* Right TOC sidebar – sticky */
+  .sidebar-toc {
+    width: 240px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 140px;
+    align-self: start;
+  }
+  
+  .toc-inner {
+    background: rgba(0,0,0,0.02);
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  
+  .toc-inner h3 {
+    font-size: 1.1rem;
+    margin-bottom: 16px;
+    color: var(--text-secondary);
+  }
+  
+  .toc-links a {
+    display: block;
+    color: var(--link);
+    text-decoration: none;
+    margin: 8px 0;
+    font-size: 15px;
+  }
+  
+  .toc-links a:hover { text-decoration: underline; }
+  
+  /* Post header & content */
+  .post-header {
+    margin-bottom: 80px;
+    text-align: center;
+  }
+  
+  h1 {
+    font-size: 3.2rem;
+    font-weight: 700;
+    line-height: 1.12;
+    margin-bottom: 0.4em;
+  }
+  
+  .meta {
+    color: var(--text-secondary);
+    font-size: 15px;
+    margin-top: 1.2em;
+  }
+  
+  .article-body {
+    font-size: 18.5px;
+  }
+  
+  .article-body p { margin: 1.9em 0; }
+  
+  .article-body h2 {
+    font-size: 2.4rem;
+    margin: 3.2em 0 1.2em;
+    font-weight: 600;
+  }
+  
+  .article-body h3 {
+    font-size: 1.85rem;
+    margin: 2.6em 0 1em;
+    font-weight: 600;
+  }
+  
+  .article-body a {
+    color: var(--link);
+    text-decoration: none;
+  }
+  
+  .article-body a:hover { text-decoration: underline; }
+  
+  /* Code blocks */
+  pre, .codehilite {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1.6em;
+    margin: 2.4em 0;
+    overflow-x: auto;
+    font-family: 'SF Mono', Consolas, Menlo, monospace;
+  }
+  
+  /* Footer */
+  .blog-footer {
+    margin-top: 140px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 15px;
+  }
+  
+  .blog-footer a {
+    color: var(--link);
+    text-decoration: none;
+    margin: 0 1.5em;
+  }
+  
+  /* Mobile – hide sidebar, collapse nav */
+  @media (max-width: 1000px) {
+    .blog-layout {
+      flex-direction: column;
+      padding: 100px 24px 120px;
+      gap: 0;
+    }
+  
+    .sidebar-toc {
+      display: none;  /* hide TOC on mobile – Chip does similar */
+    }
+  
+    .blog-nav {
+      position: static;
+      text-align: center;
+      margin: 30px 0 50px;
+    }
+  
+    .blog-nav a {
+      margin: 0 1em;
+    }
+  
+    h1 {
+      font-size: 2.6rem;
+    }
+  }

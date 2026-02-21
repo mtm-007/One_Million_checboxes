@@ -87,19 +87,60 @@ async def track_page_view(client_ip: str, page: str, referrer: str, redis):
             await redis.set(key, json.dumps(d), **({"ex":3600} if "session" in key else {}))
     print(f"[PAGE VIEW] {client_ip} viewed {page}")
 
+# async def track_referrer(client_ip: str, referrer: str, redis):
+#     if not referrer: referrer = "direct"
+#     parsed = parse_referrer(referrer)
+#     if (vd := await redis.get(f"visitor:{client_ip}")):
+#         v = json.loads(vd)
+#         v.setdefault("first_referrer", parsed); v.setdefault("first_referrer_time", time.time())
+#         v["last_referrer"] = parsed; v["last_referrer_time"] = time.time()
+#         refs = v.setdefault("all_referrers", [])
+#         if not refs or refs[-1]["source"] != parsed["source"]:
+#             refs.append({"source":parsed["source"],"type":parsed["type"],"timestamp":time.time()})
+#             v["all_referrers"] = refs[-20:]
+#         await redis.set(f"visitor:{client_ip}", json.dumps(v))
+#     await redis.incr(f"referrer_stats:{parsed['source']}")
+#     print(f"[REFERRER] {client_ip} came from {parsed['source']} ({parsed['type']})")
+
 async def track_referrer(client_ip: str, referrer: str, redis):
-    if not referrer: referrer = "direct"
+    if not referrer:
+        referrer = "direct"
+
     parsed = parse_referrer(referrer)
-    if (vd := await redis.get(f"visitor:{client_ip}")):
-        v = json.loads(vd)
-        v.setdefault("first_referrer", parsed); v.setdefault("first_referrer_time", time.time())
-        v["last_referrer"] = parsed; v["last_referrer_time"] = time.time()
-        refs = v.setdefault("all_referrers", [])
-        if not refs or refs[-1]["source"] != parsed["source"]:
-            refs.append({"source":parsed["source"],"type":parsed["type"],"timestamp":time.time()})
-            v["all_referrers"] = refs[-20:]
-        await redis.set(f"visitor:{client_ip}", json.dumps(v))
+
+    key = f"visitor:{client_ip}"
+    pipe = redis.pipeline()
+
+    # Get current data (or empty dict)
+    current = await redis.get(key)
+    v = json.loads(current) if current else {}
+
+    # Set FIRST referrer only if not already present
+    if "first_referrer" not in v:
+        v["first_referrer"] = parsed
+        v["first_referrer_time"] = time.time()
+
+    # Always update LAST referrer
+    v["last_referrer"] = parsed
+    v["last_referrer_time"] = time.time()
+
+    # Append to ALL_REFERRERS list (dedup consecutive, keep last 20)
+    all_refs = v.get("all_referrers", [])
+    if not all_refs or all_refs[-1]["source"] != parsed["source"]:
+        all_refs.append({
+            "source": parsed["source"],
+            "type": parsed["type"],
+            "timestamp": time.time()
+        })
+        v["all_referrers"] = all_refs[-20:]  # keep last 20
+
+    # Save back
+    pipe.set(key, json.dumps(v))
+    pipe.execute()
+
+    # Increment global source counter (this is why stats page works)
     await redis.incr(f"referrer_stats:{parsed['source']}")
+
     print(f"[REFERRER] {client_ip} came from {parsed['source']} ({parsed['type']})")
 
 async def end_session(client_ip: str, redis):
@@ -388,6 +429,8 @@ async def render_visitors_page(request, redis, offset: int = 0, limit: int = 5, 
                     f'<td data-label="Actions">{v.get("total_actions", 0)}</td>'
                     f'<td data-label="Scroll %">{v.get("max_scroll_depth", 0):.0f}%</td>'
                     f'<td data-label="Last Page">{v.get("last_page", "/")[:20]}</td>'
+                    # In your row string
+                    #f'<td data-label="Referrers">{", ".join(r["source"] for r in v.get("all_referrers", [])) or "-"}</td>'
                     '</tr>' )
             table_rows.append(row)
 
@@ -413,7 +456,8 @@ async def render_visitors_page(request, redis, offset: int = 0, limit: int = 5, 
             fh.Div( fh.Div(fasthtml_components.gradient_chart(chart_days_data), cls="chart-bars-container"), cls="chart-container" ),
             fasthtml_components.nav_links(  ("← Back to checkboxes", "/"),
                                             ("View Referrer Stats →", "/referrer-stats", "background:#4ecdc4;"),
-                                            ("View Time Stats →", "/time-spent-stats", "background:#9b59b6;")
+                                            ("View Time Stats →", "/time-spent-stats", "background:#9b59b6;"),
+                                            ("📝 How This Was Built →", "/blog", "background:#e67e22;")
             ),
             fh.Div( fh.H2(f"Visitors Dashboard (Last {limit} Visitors)", cls="section-title"),
                     fh.P("← Scroll horizontally to see all columns →", 
