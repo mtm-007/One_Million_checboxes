@@ -26,7 +26,7 @@ app_image = (modal.Image.debian_slim(python_version="3.12")
     .pip_install("python-fasthtml==0.12.36", "httpx==0.27.0" ,"redis>=5.3.0", "pytz", "aiosqlite","markdown==3.10.2")
     .apt_install("redis-server").add_local_file(css_path_local,remote_path=css_path_remote, )
     #.add_local_file("blog_post.md", remote_path="/root/blog_post.md")
-    #.add_local_file("static/blog.html", remote_path="/root/static/blog.html")
+    .add_local_file("static/blog.html", remote_path="/root/static/blog.html")
     .add_local_python_source("utils","geo", "config", "fasthtml_components", "persistence", "analytics") )# This is the key: it adds utils.py and makes it importable
 
 def setup_logging():
@@ -117,6 +117,7 @@ def web():# Start redis server locally inside the container (persisted to volume
                                                                                             
     metrics_for_count = { "request_count" : 0,  "last_throughput_log" : time.time() }
     throughput_lock = asyncio.Lock()
+
 
     @web_app.middleware("http")#ASGI Middleware for latency + throughput logging
     async def metrics_middleware(request, call_next):
@@ -250,7 +251,20 @@ def web():# Start redis server locally inside the container (persisted to volume
         return await analytics.render_visitors_page(request, redis, offset, limit, days)
 
     logger.info("✅ One Million Checkboxes App initialized successfully")
-    return web_app
+
+    # ↓ THIS GOES LAST, replaces `return web_app`
+    from starlette.applications import Starlette
+    from starlette.responses import FileResponse
+    from starlette.routing import Route, Mount
+
+    async def raw_blog(request):
+        return FileResponse("/root/static/blog.html")
+
+    return Starlette(routes=[
+        Route("/blog", raw_blog),
+        Mount("/", app=web_app),
+    ])
+    #return web_app
 
 class Client:
     def __init__(self):
