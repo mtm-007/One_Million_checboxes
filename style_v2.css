@@ -931,3 +931,124 @@ h1 {
         font-size: 0.85em;
     }
 }
+
+/* ============================================
+   BLOG VISITORS PAGE
+   ============================================ */
+
+.blog-stats-page {
+    background: linear-gradient(to bottom, #f8f9fa 0%, #e9ecef 100%);
+    min-height: 100vh;
+    padding-bottom: 60px;
+}
+
+.blog-header {
+    text-align: center;
+    padding: 40px 20px 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    clip-path: polygon(0 0, 100% 0, 100% 85%, 0 100%);
+}
+
+.blog-header h1 {
+    margin: 0;
+    font-size: 2.8rem;
+    font-weight: 700;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.blog-subtitle {
+    font-size: 1.2rem;
+    opacity: 0.9;
+    margin-top: 8px;
+}
+
+/* Reuse existing stats-grid but with slight tweak for blog feel */
+.blog-stats-grid {
+    /* same as .stats-grid */
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1.5rem;
+    margin:  -60px 20px 40px 20px;   /* negative margin to overlap header */
+    position: relative;
+    z-index: 2;
+}
+
+/* Slightly different gradient or color for blog distinction (optional) */
+.blog-stats-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);   /* green theme to match checkbox app feel */
+    color: white;
+    padding: 24px 20px;
+    border-radius: 12px;
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.25);
+    text-align: center;
+    transition: transform 0.2s ease;
+}
+
+.blog-stats-card:hover {
+    transform: translateY(-6px);
+}
+
+.blog-stats-number {
+    font-size: 3.2rem;
+    font-weight: 800;
+    margin: 8px 0;
+}
+
+.blog-stats-label {
+    font-size: 1.15rem;
+    opacity: 0.95;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Countries / top list - reuse horizontal bars if you have them */
+.blog-countries .bar-fill-horizontal {
+    background: linear-gradient(90deg, #2aa23a, #45b649);
+}
+
+/* Recent visitors table - reuse .visitors-table styling */
+.blog-recent-table {
+    /* inherit from .visitors-table */
+    background: white;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+}
+
+.blog-recent-table th {
+    background: #667eea;
+    color: white;
+    text-transform: uppercase;
+    font-size: 0.85rem;
+    letter-spacing: 0.5px;
+}
+
+/* Nav links at top/bottom */
+.blog-nav {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    margin: 30px 0 40px;
+    flex-wrap: wrap;
+}
+
+.blog-nav a {
+    /* reuse .back-link but centered */
+    background: white;
+    color: #667eea;
+    border: 2px solid #2aa23a;
+    border-color: #667eea;
+    padding: 12px 24px;
+    border-radius: 50px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.25s ease;
+}
+
+.blog-nav a:hover {
+    background: #667eea;
+    color: white;
+    transform: translateY(-3px);
+    box-shadow: 0 6px 16px rgba(42, 162, 58, 0.3);
+}

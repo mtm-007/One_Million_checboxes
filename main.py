@@ -249,22 +249,50 @@ def web():# Start redis server locally inside the container (persisted to volume
     @web_app.get("/visitors")
     async def visitors_page(request, offset: int = 0, limit: int = 5, days: int= 30):
         return await analytics.render_visitors_page(request, redis, offset, limit, days)
-
+    
+    @web_app.get("/blog_visitors")
+    async def blog_visitors_page(request, offset: int = 0, limit: int = 5, days: int = 30):
+        return await analytics.render_blog_visitors_stats_page(request, redis, offset, limit, days)
+    
     logger.info("✅ One Million Checkboxes App initialized successfully")
 
     # ↓ THIS GOES LAST, replaces `return web_app`
     from starlette.applications import Starlette
-    from starlette.responses import FileResponse
+    from starlette.responses import FileResponse, HTMLResponse
     from starlette.routing import Route, Mount
 
+    # async def raw_blog(request):
+    #     return FileResponse("/root/static/blog.html")
     async def raw_blog(request):
-        return FileResponse("/root/static/blog.html")
+        client_ip   = analytics.get_real_ip(request)
+        user_agent  = request.headers.get('user-agent', 'unknown')
+        referrer    = request.headers.get('referer', 'direct')
+        path        = "/blog"   # or request.url.path if you want it dynamic
+
+        # The same tracking calls you use elsewhere
+        await analytics.start_session(client_ip, user_agent, path, redis)
+        await analytics.track_page_view(client_ip, path, referrer, redis)
+        await analytics.track_referrer(client_ip, referrer, redis)
+        
+        # If you also call this on the main page:
+        geo_data = await geo.get_geo(client_ip, redis)
+        await analytics.record_visitors(client_ip, user_agent, geo_data, redis)
+
+        # Optional: add basic error handling / fallback
+        try:
+            return FileResponse("/root/static/blog.html", media_type="text/html")
+        except Exception as e:
+            print(f"[BLOG] Failed to serve file: {e}")
+            return HTMLResponse(
+                "<h1>Blog temporarily unavailable</h1><p>Error loading content.</p>",
+                status_code=503
+            )
 
     return Starlette(routes=[
         Route("/blog", raw_blog),
         Mount("/", app=web_app),
     ])
-    #return web_app
+    
 
 class Client:
     def __init__(self):
