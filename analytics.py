@@ -671,7 +671,7 @@ async def render_blog_visitors_stats_page(request, redis, offset: int = 0, limit
             fh.Div( fasthtml_components.stat_card("Unique Blog Visitors", f"{data['visitor_count']:,}"),
                     fasthtml_components.stat_card("Humans (blog)", f"{stats['humans']:,}"),
                     fasthtml_components.stat_card("Bots (blog)", f"{stats['bots']:,}"),
-                    fasthtml_components.stat_card("VPN Users (blog)", f"{stats['vpn_users']:,}"),cls="stats-grid")
+                    fasthtml_components.stat_card("VPN Users (blog)", f"{stats['vpn_users']:,}"), cls="stats-grid"
             ),fasthtml_components.pagination(offset, limit, total_in_db, "/blog_visitors", {"days": days}),
             fh.Div( fh.H2(f"Blog Visitors by Day – Central Time", cls="section-title", style="margin:0;"),
                     fasthtml_components.range_sel(days, limit, offset, "/blog_visitors"),
