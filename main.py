@@ -80,6 +80,8 @@ def web():# Start redis server locally inside the container (persisted to volume
     
     async def startup_migration():
         await persistence.init_sqlite_db()
+        await persistence.init_blog_visits_table()
+        await persistence.restore_blog_visits_to_redis(redis)
         if not (redis_count := await redis.get("total_visitors_count"))or int(redis_count) == 0:
             sqlite_count = await persistence.get_visitor_count_sqlite()
             if sqlite_count > 0: print(f"[STARTUP] Redis empty, restoring {sqlite_count} visitors from SQLite...")
@@ -89,6 +91,7 @@ def web():# Start redis server locally inside the container (persisted to volume
     async def on_shutdown():
         print("Shutting down... Saving Redis data")
         try:
+            
             await redis.save()
             print("Redis data saved succesfully")
         except Exception as e: print(f"Error saving Redis data: {e}")
