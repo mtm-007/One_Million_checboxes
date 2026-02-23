@@ -309,7 +309,7 @@ async def handle_heartbeat(request, redis):
     try:
         data = await request.json()
         duration = data.get("duration", 0)
-        actions = data.get("actions", 0)  # ✅ read actions
+        actions = data.get("actions", 0)  
     except: 
         duration = 0
         actions = 0
@@ -317,7 +317,7 @@ async def handle_heartbeat(request, redis):
     
     if (session_raw := await redis.get(f"session:{client_ip}")):
         session = json.loads(session_raw)
-        session["actions"] = max(session.get("actions", 0), actions)  # ✅ save actions
+        session["actions"] = max(session.get("actions", 0), actions)  
         if duration > 0:
             session["current_session_duration"] = duration
         await redis.set(f"session:{client_ip}", json.dumps(session), ex=3600)
@@ -335,8 +335,7 @@ async def handle_session_end(request, redis):
             duration = 0
             source = "main"
 
-        if source == "blog":
-            # ✅ write only to 
+        if source == "blog":# ✅ write only to 
             blog_raw = await redis.get(f"blog_visitor:{client_ip}")
             print(f"[SESSION-END] blog_visitor key exists: {blog_raw is not None}")  # ✅ add this
         
@@ -349,7 +348,7 @@ async def handle_session_end(request, redis):
                     blog["max_scroll_depth"] = max(blog.get("max_scroll_depth", 0), session.get("scroll_depth", 0))
                     blog["total_actions"] = blog.get("total_actions", 0) + session.get("actions", 0)
                 await redis.set(f"blog_visitor:{client_ip}", json.dumps(blog))
-                print(f"[BLOG SESSION END] {client_ip} spent {duration:.1f} seconds on blog")
+                print(f"[BLOG SESSION END] {client_ip} spent {duration:.1f} s (total: {blog['total_time_spent']:.1f}s)")
         else:
             # existing main visitor logic unchanged
             if visitor_data := await redis.get(f"visitor:{client_ip}"):
@@ -602,15 +601,6 @@ async def blog_visitors_page(redis, offset: int = 0, limit: int = 50):
         if not raw: continue
         try:
             v = json.loads(raw)
-            # main_raw = await redis.get(f"visitor:{ip}")
-            # if main_raw:
-            #     main = json.loads(main_raw)
-            #     v["total_time_spent"] = main.get("total_time_spent", 0)
-            #     v["total_actions"] = main.get("total_actions", 0)
-            #     v["max_scroll_depth"] = main.get("max_scroll_depth", 0)
-            #     v["last_page"] = main.get("last_page", "/blog")
-            #     v["first_referrer"] = main.get("first_referrer", {})
-            #     v["last_referrer"] = main.get("last_referrer", {})
             #if v.get("pages_viewed", {}).get("/blog", 0) > 0:
             #v["timestamp"] = float(v.get("last_action_time", v.get("timestamp", time.time())))
             v["timestamp"] = float(v.get("timestamp", time.time()))
@@ -631,24 +621,7 @@ async def blog_visitors_page(redis, offset: int = 0, limit: int = 50):
         c = v.get("classification", "Human")               
         first_ref = v.get("first_referrer", {}) or {}      
         last_ref = v.get("last_referrer", {}) or {}   
-        # classification = v.get("classification", "Human")
-
-        # if "Relay" in classification:
-        #     security_badge = fh.Span("🔒 Relay", style="background:#5856d6;color:white;padding:4px 8px;border-radius:4px;font-size:0.85em;")
-        # elif is_vpn:
-        #     security_badge = fh.Span("🔐 VPN", style="background:#ff3b30;color:white;padding:4px 8px;border-radius:4px;font-size:0.85em;")
-        # else:
-        #     security_badge = fh.Span("✓ Clean", style="background:#4cd964;color:white;padding:4px 8px;border-radius:4px;font-size:0.85em;")
-
-        # is_human = "Human" in classification
-        # class_badge = fh.Span(
-        #     "👤 " + classification if is_human else "🤖 " + classification,
-        #     style=f"background:{'rgba(16,185,129,0.15)' if is_human else 'rgba(245,158,11,0.15)'};color:{'#10b981' if is_human else '#f59e0b'};padding:4px 8px;border-radius:4px;font-weight:600;"
-        # )
-
-        # local_dt = utc_to_local(v["timestamp"])
-        # time_str = local_dt.strftime("%m/%d %H:%M")
-
+        
         table_rows.append(fh.Tr(
             fh.Td(utc_to_local(v["timestamp"]).strftime("%m/%d %H:%M")),
             fh.Td(v.get("ip", "-")),
@@ -667,6 +640,7 @@ async def blog_visitors_page(redis, offset: int = 0, limit: int = 50):
             fh.Td(fh.Span(str(v.get("visit_count", 1)), style="background:rgba(99,102,241,0.15);color:#6366f1;padding:4px 8px;border-radius:4px;font-weight:600;")),
             fh.Td(utc_to_local(v["timestamp"]).strftime("%H:%M:%S")),
             fh.Td(f"{v.get('total_time_spent', 0)/60:.1f}m"),
+            fh.Td(f"{v.get('last_session_duration', 0)/60:.1f}m"),
             fh.Td(v.get("total_actions", 0)),
             fh.Td(f"{v.get('max_scroll_depth', 0):.0f}%"),
             fh.Td(v.get("last_page", "/")[:20]),
@@ -719,14 +693,11 @@ async def blog_visitors_page(redis, offset: int = 0, limit: int = 50):
                 fh.H2("Recent Blog Visitors", style="margin-top: 2rem;"),
                 fh.Table(
                     fh.Thead(
-                        fh.Tr(
-                            # fh.Th("Time"), fh.Th("IP"), fh.Th("Location"), fh.Th("Device"),
-                            # fh.Th("Classification"), fh.Th("Security"), fh.Th("ISP"), fh.Th("Visits")
-                            fh.Th("Time"), fh.Th("IP"), fh.Th("Device"), fh.Th("Security"),
-                            fh.Th("Category"), fh.Th("First Source"), fh.Th("Last Source"),
-                            fh.Th("ISP/Org"), fh.Th("City"), fh.Th("Zip"), fh.Th("Country"),
-                            fh.Th("Visits"), fh.Th("Last Seen"), fh.Th("Time Spent"),
-                            fh.Th("Actions"), fh.Th("Scroll %"), fh.Th("Last Page")
+                        fh.Tr(  fh.Th("Time"), fh.Th("IP"), fh.Th("Device"), fh.Th("Security"),
+                                fh.Th("Category"), fh.Th("First Source"), fh.Th("Last Source"),
+                                fh.Th("ISP/Org"), fh.Th("City"), fh.Th("Zip"), fh.Th("Country"),
+                                fh.Th("Visits"), fh.Th("Last Seen"), fh.Th("Time Time"),fh.Th("Last Session"),
+                                fh.Th("Actions"), fh.Th("Scroll %"), fh.Th("Last Page")
                         )
                     ),
                     fh.Tbody(*table_rows) if table_rows else fh.Tbody(fh.Tr(fh.Td("No blog visitors recorded yet", colspan="8", style="text-align:center;padding:2rem;")))

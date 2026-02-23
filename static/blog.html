@@ -333,9 +333,16 @@ if not referrer and request.query_params.get('utm_source') == 'github':
         init() {
             if (this.initialized) return;
             this.initialized = true;
+            this.startTime = Date.now();
+            this.actionCount = 0;
+            this.scrollDepth = 0;
+
+            ['click', 'keypress', 'touchstart'].forEach(evt =>{
+                document.addEventListener(evt, () =>{ this.actionCount++; }, { passive: true});
+            });
     
             this.sendHeartbeat();
-            setInterval(() => { this.sendHeartbeat(); }, 10000);
+            setInterval(() => { this.sendHeartbeat(); }, 3000);
     
             let scrollTimer;
             window.addEventListener('scroll', () => {
@@ -352,15 +359,14 @@ if not referrer and request.query_params.get('utm_source') == 'github':
             window.addEventListener('beforeunload', () => { this.endSession(); });
             window.addEventListener('pagehide', () => { this.endSession(); });
         },
-        // ✅ add this method
-        logAction() {
-            this.actionCount = (this.actionCount || 0) + 1;
-            fetch('/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ duration: (Date.now() - this.startTime) / 1000, 
-                                    actions: this.actionCount,
-                                    timestamp: Date.now() }), keepalive: true
-            }).catch(() => {});
-        },
+        // logAction() {
+        //     this.actionCount = (this.actionCount || 0) + 1;
+        //     fetch('/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'},
+        //         body: JSON.stringify({ duration: (Date.now() - this.startTime) / 1000, 
+        //                             actions: this.actionCount,
+        //                             timestamp: Date.now() }), keepalive: true
+        //     }).catch(() => {});
+        // },
     
         sendHeartbeat() {
             const duration = (Date.now() - this.startTime) / 1000;
@@ -371,6 +377,9 @@ if not referrer and request.query_params.get('utm_source') == 'github':
         },
     
         endSession() {
+            if(this.sessionEnded)return;
+            this.sessionEnded = true;
+
             const duration = (Date.now() - this.startTime) / 1000;
             const data = { duration, scrollDepth: this.scrollDepth, timestamp: Date.now(), source: "blog" };
             if (navigator.sendBeacon) {
@@ -385,6 +394,9 @@ if not referrer and request.query_params.get('utm_source') == 'github':
     // ✅ visibilitychange is OUTSIDE init() so it always fires
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) {
+            tracker.startTime = Date.now();
+            tracker.actionCount = 0;
+            tracker.sessionEnded = false;
             tracker.init();  // start tracking if not already started
             fetch('/track-blog-view', { method: 'POST', keepalive: true }).catch(() => {});
             tracker.sendHeartbeat();

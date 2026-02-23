@@ -254,6 +254,19 @@ def web():# Start redis server locally inside the container (persisted to volume
         from starlette.responses import JSONResponse
         return JSONResponse({"status": "ok"})
 
+    async def reset_blog_time(request):
+        from starlette.responses import JSONResponse
+        ips_bytes = await redis.zrange("blog:visits:by_last_time", 0, -1)
+        for ip_b in ips_bytes:
+            ip = ip_b.decode('utf-8')
+            raw = await redis.get(f"blog_visitor:{ip}")
+            if raw:
+                blog = json.loads(raw)
+                blog["total_time_spent"] = 0
+                blog["last_session_duration"] = 0
+                await redis.set(f"blog_visitor:{ip}", json.dumps(blog))
+        return JSONResponse({"status": "reset", "ips": len(ips_bytes)})
+
     @web_app.get("/blog_visitors")
     async def blog_visitors_page(request, offset: int = 0, limit: int = 5):#, days: int = 30):
         #return await analytics.render_blog_visitors_stats_page(request, redis, offset, limit, days)
@@ -310,6 +323,7 @@ def web():# Start redis server locally inside the container (persisted to volume
         lifespan=lifespan,
         routes=[Route("/blog", raw_blog),
                 Route("/track-blog-view", track_blog_view, methods=["POST"]),
+                Route("/reset-blog-time", reset_blog_time),#temporarily added
                 Mount("/", app=web_app),]
         )
     
