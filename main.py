@@ -254,7 +254,6 @@ def web():# Start redis server locally inside the container (persisted to volume
 
     @web_app.get("/blog_visitors")
     async def blog_visitors_page(request, offset: int = 0, limit: int = 5):#, days: int = 30):
-        #return await analytics.render_blog_visitors_stats_page(request, redis, offset, limit, days)
         return await analytics.blog_visitors_page(redis, offset= offset, limit=limit)
     
     logger.info("✅ One Million Checkboxes App initialized successfully")
