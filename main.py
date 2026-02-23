@@ -1,4 +1,4 @@
-import time,asyncio,subprocess, modal,json
+import time,asyncio,subprocess, modal
 from asyncio import Lock
 from pathlib import Path
 from fasthtml.js import NotStr
@@ -7,7 +7,7 @@ from redis.asyncio import Redis
 from uuid import uuid4
 import logging
 from logging.handlers import RotatingFileHandler
-import geo, config, persistence, analytics, fasthtml_components
+import geo, config, persistence, analytics
 
 checkboxes_bitmap_key, checkbox_cache, clients, clients_mutex= "checkboxes_bitmap", {}, {}, Lock()
 N_CHECKBOXES, LOAD_MORE_SIZE = 1000000, 2000
@@ -25,7 +25,6 @@ _logger = None
 app_image = (modal.Image.debian_slim(python_version="3.12")
     .pip_install("python-fasthtml==0.12.36", "httpx==0.27.0" ,"redis>=5.3.0", "pytz", "aiosqlite","markdown==3.10.2")
     .apt_install("redis-server").add_local_file(css_path_local,remote_path=css_path_remote, )
-    #.add_local_file("blog_post.md", remote_path="/root/blog_post.md")
     .add_local_file("static/blog.html", remote_path="/root/static/blog.html")
     .add_local_python_source("utils","geo", "config", "fasthtml_components", "persistence", "analytics") )# This is the key: it adds utils.py and makes it importable
 
@@ -243,7 +242,6 @@ def web():# Start redis server locally inside the container (persisted to volume
         user_agent = request.headers.get('user-agent', 'unknown')
         referrer = request.headers.get('referer', '')
         
-        # ✅ always ensure a session exists so heartbeat/session-end have somewhere to write
         if not await redis.get(f"session:{client_ip}"):
             await analytics.start_session(client_ip, user_agent, "/blog", redis)
         
@@ -253,19 +251,6 @@ def web():# Start redis server locally inside the container (persisted to volume
         await analytics.record_blog_visitor(client_ip, user_agent, geo_data, redis, referrer)
         from starlette.responses import JSONResponse
         return JSONResponse({"status": "ok"})
-
-    async def reset_blog_time(request):
-        from starlette.responses import JSONResponse
-        ips_bytes = await redis.zrange("blog:visits:by_last_time", 0, -1)
-        for ip_b in ips_bytes:
-            ip = ip_b.decode('utf-8')
-            raw = await redis.get(f"blog_visitor:{ip}")
-            if raw:
-                blog = json.loads(raw)
-                blog["total_time_spent"] = 0
-                blog["last_session_duration"] = 0
-                await redis.set(f"blog_visitor:{ip}", json.dumps(blog))
-        return JSONResponse({"status": "reset", "ips": len(ips_bytes)})
 
     @web_app.get("/blog_visitors")
     async def blog_visitors_page(request, offset: int = 0, limit: int = 5):#, days: int = 30):
@@ -323,7 +308,6 @@ def web():# Start redis server locally inside the container (persisted to volume
         lifespan=lifespan,
         routes=[Route("/blog", raw_blog),
                 Route("/track-blog-view", track_blog_view, methods=["POST"]),
-                #Route("/reset-blog-time", reset_blog_time),#temporarily added
                 Mount("/", app=web_app),]
         )
     

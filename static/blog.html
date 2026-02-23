@@ -204,9 +204,11 @@ nav.blog-nav {
     </header>
 
     <div class="blog-article">
-      <p>A few months ago I had a silly idea: build a real-time collaborative grid with <em>exactly one million checkboxes</em> — anyone on the internet clicks, everyone sees it instantly. No login, no accounts, pure shared chaos. It sounded simple. It absolutely was not.</p>
+      <p>As a Machine Learning Engineer, my world had been PyTorch, datasets, training loops, and model checkpoints — zero frontend experience. HTML? CSS? JavaScript? Barely touched them. But I wanted to build something interactive and live for my upcoming diffusion models site (and a few other ideas brewing), so I decided to force myself into the deep end. This "One Million Checkboxes" project was my deliberate hack-around: a fun, absurd excuse to learn real frontend + full-stack deployment skills while shipping something shareable. What started as a side quest turned into one of the best learning explosions I've had.</p>
 
-      <p>The app is live right now at <a href="https://mtm-007--fasthtml-checkboxes-web.modal.run/">mtm-007--fasthtml-checkboxes-web.modal.run</a>. Go click a few. Someone across the world will see them flip. That still blows my mind.</p>
+      <p>A few months ago the silly idea hit: build a real-time collaborative grid with <em>exactly one million checkboxes</em> — anyone clicks, everyone sees it instantly. No login, no accounts, pure shared chaos. It sounded simple. It absolutely was not.</p>
+
+      <p>The app is live right now at <a href="https://mtm-007--fasthtml-checkboxes-web.modal.run/">mtm-007--fasthtml-checkboxes-web.modal.run</a>. Go click a few. Someone across the world will see them flip. That still blows my mind — and now I actually understand how to make it happen.</p>
 
       <p>This is the full story — every terrible idea, every data-loss panic, every “why is Redis eating my visitors again?”, pulled straight from 227 commits, the code, <code>ARCHITECTURE.md</code> diagrams, and many cold-sweat debugging nights. (I literally went through the entire commit history again today to make sure I didn’t miss any war stories.)</p>
 
@@ -235,7 +237,7 @@ BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</c
         <li>Next poll → client gets only changes, OOB swap</li>
       </ul>
 
-      <p>Max 500 ms latency, zero server connection management, scales trivially. Still love this choice.</p>
+      <p>Max 500 ms latency, zero server connection management, scales trivially. Still love this choice — and HTMX became one of my favorite discoveries for future projects.</p>
 
       <h2 id="full-architecture">The Full Architecture (What Actually Ships)</h2>
 
@@ -261,20 +263,15 @@ BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</c
 
         <li><strong>Mermaid Diagram Nightmares in README</strong><br />Comments, parentheses, arrows, en-dashes — all broke the parser. Dozens of “fix mermaid again” commits.</li>
 
-        <li><strong>Blog Visitors Tracking Saga </strong><br />Time-spent math errors, scroll not persisting, shutdown loss. Fixed with proper lifespan, heartbeat + beforeunload beacon, chunk-based scroll math.</li>
+        <li><strong>Blog Visitors Tracking Saga (Feb 21–23 2026)</strong><br />Time-spent math errors, scroll not persisting, shutdown loss. Fixed with proper lifespan, heartbeat + beforeunload beacon, chunk-based scroll math.</li>
 
         <li><strong>Refactoring Hell & Code Archaeology</strong><br />Scattered <code>one_M_checkboxes_old.py</code>, prototypes, logs, DB dumps. Moved everything into <code>checkboxes_v0/</code> and <code>monetization_prop/</code>, deleted dead code, reduced line count dramatically.</li>
 
         <li><strong>Serverless Gotchas on Modal</strong><br />Redis as subprocess, forced volume commits, multi-container Redis sharing, scaling from 1→3 containers.</li>
 
-        <li><strong>FastHTML vs Plain HTML Rendering War </strong><br />I wanted the blog to be beautiful, clean serif typography with zero interference. But the main site’s <code>style_v2.css</code> and FastHTML’s automatic component wrapping / head injection were destroying everything — wrong fonts, broken layout, extra margins, colors overridden.<br />
-        Debug sessions: “running debug session with overridding plain html by fasthtml” and “add a blog post page for testing how it would look”.<br />
-        <strong>Fix</strong>: Switched to pure Starlette to bypass FastHTML entirely. Direct <code>Starlette Response(content=raw_html, media_type="text/html")</code> so the blog renders untouched. Commit: “fixed plain html rendered blog”. This was the cleanest solution — no more fighting the framework.</li>
+        <li><strong>FastHTML vs Plain HTML Rendering War (Feb 21 commits)</strong><br />Wanted beautiful serif blog with zero interference. Main site’s <code>style_v2.css</code> + FastHTML injection wrecked fonts/layout.<br /><strong>Fix</strong>: Pure Starlette bypass for blog route — raw <code>Response(content=raw_html, media_type="text/html")</code>. Commit: “fixed plain html rendered blog”.</li>
 
-        <li><strong>Modal App Logs Nightmare</strong><br />Modal’s built-in log viewer is painful for real debugging — no easy tail, delayed, hard to filter prints during hot reloads or crashes.<br />
-        Solution: Added a dedicated log file on the persistent Modal volume. Every <code>print()</code>, error, and custom log now appends to <code>/data/app.log</code>. Plus a small “app modal apps logs extracter script” so I can pull logs instantly after deploys.<br />
-        Commits (Feb 15): “add modal app logs and print statements to saved file” + “add app modal apps logs extracter script, and comment out requirements.txt...”<br />
-        This single change saved hours of “where did my debug output go?” frustration.</li>
+        <li><strong>Modal App Logs Nightmare</strong><br />Modal log viewer painful for real debugging.<br /><strong>Fix</strong>: Dedicated <code>/data/app.log</code> on volume + extractor script. Commits (Feb 15): “add modal app logs and print statements to saved file” + “add app modal apps logs extracter script...”</li>
       </ol>
 
       <h2 id="what-id-do-differently">What I’d Do Differently Next Time</h2>
@@ -284,8 +281,8 @@ BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</c
         <li>Rate limiting (Redis token bucket per IP)</li>
         <li>Separate analytics DB</li>
         <li>Cloudflare bot management upstream</li>
-        <li>Pre-commit hooks + structured logging to file from day one</li>
-        <li>Decide early: either full FastHTML everywhere or pure Starlette for static/clean pages</li>
+        <li>Pre-commit hooks + structured logging from day one</li>
+        <li>Decide early: full FastHTML or pure Starlette for clean/static pages</li>
       </ul>
 
       <h2 id="takeaways">Takeaways After 227 Commits</h2>
@@ -295,11 +292,12 @@ BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</c
         <li><strong>Referer header lies</strong>. Ship UTM always.</li>
         <li><strong>Serverless + volumes incredible</strong>, but master shutdown/lifespan + explicit file logging.</li>
         <li><strong>FastHTML + HTMX stupidly productive</strong> — but know when to drop to raw Starlette for pixel-perfect HTML.</li>
-        <li><strong>Persistence & logging are never afterthoughts</strong>. SQLite backup/restore + volume log file saved me repeatedly.</li>
-        <li><strong>Small bugs compound</strong>. One missing await, one extra parenthesis, one CSS bleed, one aggressive TTL — suddenly your whole analytics story is lying.</li>
+        <li><strong>Persistence & logging are never afterthoughts</strong>. SQLite + volume log file saved me repeatedly.</li>
+        <li><strong>Small bugs compound</strong>. Missing await, extra parenthesis, CSS bleed, aggressive TTL → lying analytics.</li>
+        <li><strong>Jump in even if you're a total beginner on one side</strong>. Coming from pure ML, this forced me to learn frontend deployment end-to-end — exactly the foundation I needed for my diffusion models site and beyond.</li>
       </ul>
 
-      <p>Started as weekend toy, became a masterclass in system design, load debugging, framework boundaries, and shipping fast with modern Python tools.</p>
+      <p>Started as weekend toy to level up my skills, became a masterclass in system design, load debugging, framework boundaries, and shipping fast with modern Python tools.</p>
 
       <p>See the chaos:<br />
       • Repo: <a href="https://github.com/mtm-007/One_Million_checboxes">github.com/mtm-007/One_Million_checboxes</a><br />
@@ -308,7 +306,7 @@ BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</c
       • <code>main.py</code> for Starlette bypass, blog route, and log file setup<br />
       • <code>style_v2.css</code> for the final visitor/blog fixes</p>
 
-      <p>Go click some boxes. Leave it more chaotic. Build something similar? Drop a link — I want to see your lessons.</p>
+      <p>Go click some boxes. Leave it more chaotic. Building something similar (or your own diffusion playground)? Drop a link — I want to see your lessons too.</p>
 
       <p>Happy hacking,<br />
       mera<br />
