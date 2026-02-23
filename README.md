@@ -10,21 +10,29 @@ Click any checkbox → everyone sees it update instantly.
 (If you're reading this on the GitHub repo — welcome! Click the button/link above to jump straight to the live grid 😄)
 
 ### Built With
-- **FastHTML** – Pythonic web framework
-- **HTMX** – Lightweight interactivity
-- **Redis** – Real-time state + bitmap for 1M checkboxes
-- **Modal** – Serverless hosting & scaling
+- **FastHTML** – Pythonic web framework (0.12.x)
+- **HTMX** – Lightweight interactivity (polling 500ms + OOB swaps)
+- **Redis** – Real-time state (bitmap + visitor/blog data + caching)
+- **Modal** – Serverless hosting, auto-scaling (max 3 containers), persistent volumes
+- **Starlette** – Low-level ASGI for raw HTML routes (e.g. blog)
 - **GitHub Actions** – CI/CD pipeline
 
 ### Features
-- Real-time collaborative checkboxes (everyone sees changes)
-- Persistent state across restarts
+- Real-time collaborative checkboxes (everyone sees changes < 500 ms)
+- Persistent state across restarts (Redis RDB + SQLite backup/restore)
 - Visitor & referrer analytics dashboard (`/visitors`)
-- Responsive design (mobile + desktop)
+- **Separate blog visitor stats** (`/blog_visitors`) – time spent, scroll depth, actions
+- Responsive design (mobile-first, lazy-load 2,000-checkbox chunks)
+- Accurate session tracking (heartbeat 10s + beforeunload beacon)
+- Detailed persistent logging (`/logs/app.log` with rotation)
+- Latency + throughput metrics in logs
+- GitHub referrer fix (iframe no-referrer + UTM fallback)
 
-Source code & deploy setup: right here in this repo!
+Source code & deploy setup: right here!
+
 
 # One Million Checkboxes - System Architecture
+# System Architecture
 
 ## High-Level System Design
 ```mermaid
@@ -36,21 +44,25 @@ graph TD
     end
     
     subgraph App_Layer["🖥️ APPLICATION LAYER"]
-        FastHTML[FastHTML<br/>Web Server]
+        FastHTML[FastHTML / Starlette<br/>Web Server]
         
         subgraph Components["Core Components"]
-            Routes[Routes /<br/>Handlers]
-            ClientMgr[Client<br/>Manager]
-            GeoAPI[Geo API<br/>Layer]
-            CacheLayer[Redis Cache Layer<br/>45s TTL for heavy pages<br>e.g. /visitors]
+            Routes[Routes / Handlers]
+            ClientMgr[Client Manager<br/>(diff queues)]
+            GeoAPI[Geo API Layer]
+            CacheLayer[Redis Cache Layer<br/>45s TTL for dashboards]
+            Metrics[Metrics Middleware<br/>(latency + throughput)]
+            Logging[File Logging<br/>(/logs/app.log)]
         end
     end
     
     subgraph Data_Layer["💾 DATA LAYER - Redis"]
         Bitmap[Bitmap<br/>1M checkboxes<br/>125KB]
-        Visitor[Visitor Data<br/>Hash/Sorted Set]
-        GeoCache[Geolocation<br/>Cache]
-        PageCache[Page Cache<br/>visitors dashboard<br>referrer stats<br>etc.]
+        Visitor[Visitor Data<br/>Hash + Sorted Set]
+        BlogVisitor[Blog Visitor Data<br/>Separate namespace]
+        GeoCache[Geolocation Cache]
+        PageCache[Page Cache<br/>visitors / referrer stats]
+        Sessions[Session Tracking<br/>(heartbeat + beacon)]
     end
     
     subgraph Ext_Layer["🌐 EXTERNAL APIS"]
@@ -60,52 +72,56 @@ graph TD
     end
     
     subgraph Storage_Layer["💿 STORAGE LAYER"]
-        Disk[Modal Volume<br/>/data/dump.rdb + SQLite]
+        Disk[Modal Volume<br/>/data (Redis RDB + SQLite)<br/>/logs (app.log)]
     end
     
-    %% Client to Application
+    %% Connections (same as before + new)
     B1 -->|HTTP/HTMX| FastHTML
     B2 -->|HTTP/HTMX| FastHTML
     BN -->|HTTP/HTMX| FastHTML
     
-    %% Application to Components
     FastHTML --- Routes
     FastHTML --- ClientMgr
     FastHTML --- GeoAPI
     FastHTML --- CacheLayer
+    FastHTML --- Metrics
+    FastHTML --- Logging
     
-    %% Components to Data Layer
-    Routes -->|GETBIT/SETBIT| Bitmap
-    Routes -->|BITCOUNT| Bitmap
+    Routes -->|GETBIT/SETBIT/BITCOUNT| Bitmap
     ClientMgr -->|Diff Queue| Visitor
     GeoAPI -->|GET/SET| GeoCache
     CacheLayer -->|GET/SET ex=45s| PageCache
+    Metrics -->|Log latency/throughput| Logging
+    Sessions -->|Heartbeat + Beacon| Visitor
+    Sessions -->|Heartbeat + Beacon| BlogVisitor
     
-    %% Geo API to External
-    GeoAPI -->|Fallback 1| API1
-    GeoAPI -->|Fallback 2| API2
-    GeoAPI -->|Fallback 3| API3
+    GeoAPI -->|Fallback chain| API1
+    GeoAPI -->|Fallback chain| API2
+    GeoAPI -->|Fallback chain| API3
     
-    %% Data to Storage
-    Bitmap -->|Persist| Disk
-    Visitor -->|Persist| Disk
+    Bitmap -->|Persist RDB| Disk
+    Visitor -->|Persist + SQLite| Disk
+    BlogVisitor -->|Persist| Disk
     GeoCache -->|Persist| Disk
-    PageCache -->|Ephemeral optional persist| Disk
+    PageCache -->|Ephemeral| Disk
+    Logging -->|RotatingFileHandler| Disk
     
-    %% Styling
+    %% Styling (kept original + extras)
     classDef clientStyle fill:#667eea,stroke:#764ba2,stroke-width:2px,color:#fff
     classDef appStyle fill:#48bb78,stroke:#38a169,stroke-width:2px,color:#fff
     classDef dataStyle fill:#ed8936,stroke:#dd6b20,stroke-width:2px,color:#fff
     classDef extStyle fill:#4299e1,stroke:#3182ce,stroke-width:2px,color:#fff
     classDef storageStyle fill:#9f7aea,stroke:#805ad5,stroke-width:2px,color:#fff
     classDef cacheStyle fill:#f6e05e,stroke:#d4c757,stroke-width:2px,color:#000
+    classDef metricsStyle fill:#ec4899,stroke:#db2777,stroke-width:2px,color:#fff
     
     class B1,B2,BN clientStyle
-    class FastHTML,Routes,ClientMgr,GeoAPI appStyle
-    class Bitmap,Visitor,GeoCache dataStyle
+    class FastHTML,Routes,ClientMgr,GeoAPI,Metrics,Logging appStyle
+    class Bitmap,Visitor,BlogVisitor,GeoCache dataStyle
     class API1,API2,API3 extStyle
     class Disk storageStyle
-    class CacheLayer,PageCache cacheStyle
+    class CacheLayer,PageCache,Sessions cacheStyle
+    class Metrics metricsStyle
 ```
 
 ## Data Flow: Checkbox Toggle

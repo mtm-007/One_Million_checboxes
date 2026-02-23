@@ -160,6 +160,14 @@ nav.blog-nav {
     .blog-article h2 { font-size: 23px; }
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    mermaid.run({
+      querySelector: '.language-mermaid'  // Targets your <code class="language-mermaid">
+    });
+  });
+</script>
 </head>
 <body>
 
@@ -204,7 +212,7 @@ nav.blog-nav {
     </header>
 
     <div class="blog-article">
-      <p>As a Machine Learning Engineer, my world had been PyTorch, datasets, training loops, and model checkpoints — zero frontend experience. HTML? CSS? JavaScript? Barely touched them. But I wanted to build something interactive and live for my upcoming diffusion models site (and a few other ideas brewing), so I decided to force myself into the deep end. This "One Million Checkboxes" project was my deliberate hack-around: a fun, absurd excuse to learn real frontend + full-stack deployment skills while shipping something shareable. What started as a side quest turned into one of the best learning explosions I've had.</p>
+      <p>As a junior Machine Learning Engineer, my world had been PyTorch, datasets, training loops, and model checkpoints — zero frontend experience. HTML? CSS? JavaScript? Barely touched them. But I wanted to build something interactive and live for my upcoming diffusion models site (and a few other ideas brewing), so I decided to force myself into the deep end. This "One Million Checkboxes" project was my deliberate hack-around: a fun, absurd excuse to learn real frontend + full-stack deployment skills while shipping something shareable. What started as a side quest turned into one of the best learning explosions I've had.</p>
 
       <p>A few months ago the silly idea hit: build a real-time collaborative grid with <em>exactly one million checkboxes</em> — anyone clicks, everyone sees it instantly. No login, no accounts, pure shared chaos. It sounded simple. It absolutely was not.</p>
 
@@ -250,7 +258,90 @@ BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</c
         <li><strong>Deployment</strong>: Modal serverless + GitHub Actions CI/CD (zero-downtime auto-scaling)</li>
       </ul>
 
-      <p>Full Mermaid diagrams and flows in <code>ARCHITECTURE.md</code>.</p>
+      <p>Here’s a visual overview of how everything connects (straight from the repo’s README — the high-level system design diagram):</p>
+
+      <pre><code class="language-mermaid">
+graph TD
+    subgraph Client_Layer["👥 CLIENT LAYER"]
+        B1[Browser 1<br/>HTMX + Responsive CSS]
+        B2[Browser 2<br/>HTMX + Responsive CSS]
+        BN[Browser N<br/>HTMX + Responsive CSS]
+    end
+    
+    subgraph App_Layer["🖥️ APPLICATION LAYER"]
+        FastHTML[FastHTML<br/>Web Server]
+        
+        subgraph Components["Core Components"]
+            Routes[Routes /<br/>Handlers]
+            ClientMgr[Client<br/>Manager]
+            GeoAPI[Geo API<br/>Layer]
+            CacheLayer[Redis Cache Layer<br/>45s TTL for heavy pages<br>e.g. /visitors]
+        end
+    end
+    
+    subgraph Data_Layer["💾 DATA LAYER - Redis"]
+        Bitmap[Bitmap<br/>1M checkboxes<br/>125KB]
+        Visitor[Visitor Data<br/>Hash/Sorted Set]
+        GeoCache[Geolocation<br/>Cache]
+        PageCache[Page Cache<br/>visitors dashboard<br>referrer stats<br>etc.]
+    end
+    
+    subgraph Ext_Layer["🌐 EXTERNAL APIS"]
+        API1[ipwho.is]
+        API2[ipapi.co]
+        API3[ip-api.com]
+    end
+    
+    subgraph Storage_Layer["💿 STORAGE LAYER"]
+        Disk[Modal Volume<br/>/data/dump.rdb + SQLite]
+    end
+    
+    %% Client to Application
+    B1 -->|HTTP/HTMX| FastHTML
+    B2 -->|HTTP/HTMX| FastHTML
+    BN -->|HTTP/HTMX| FastHTML
+    
+    %% Application to Components
+    FastHTML --- Routes
+    FastHTML --- ClientMgr
+    FastHTML --- GeoAPI
+    FastHTML --- CacheLayer
+    
+    %% Components to Data Layer
+    Routes -->|GETBIT/SETBIT| Bitmap
+    Routes -->|BITCOUNT| Bitmap
+    ClientMgr -->|Diff Queue| Visitor
+    GeoAPI -->|GET/SET| GeoCache
+    CacheLayer -->|GET/SET ex=45s| PageCache
+    
+    %% Geo API to External
+    GeoAPI -->|Fallback 1| API1
+    GeoAPI -->|Fallback 2| API2
+    GeoAPI -->|Fallback 3| API3
+    
+    %% Data to Storage
+    Bitmap -->|Persist| Disk
+    Visitor -->|Persist| Disk
+    GeoCache -->|Persist| Disk
+    PageCache -->|Ephemeral optional persist| Disk
+    
+    %% Styling
+    classDef clientStyle fill:#667eea,stroke:#764ba2,stroke-width:2px,color:#fff
+    classDef appStyle fill:#48bb78,stroke:#38a169,stroke-width:2px,color:#fff
+    classDef dataStyle fill:#ed8936,stroke:#dd6b20,stroke-width:2px,color:#fff
+    classDef extStyle fill:#4299e1,stroke:#3182ce,stroke-width:2px,color:#fff
+    classDef storageStyle fill:#9f7aea,stroke:#805ad5,stroke-width:2px,color:#fff
+    classDef cacheStyle fill:#f6e05e,stroke:#d4c757,stroke-width:2px,color:#000
+    
+    class B1,B2,BN clientStyle
+    class FastHTML,Routes,ClientMgr,GeoAPI appStyle
+    class Bitmap,Visitor,GeoCache dataStyle
+    class API1,API2,API3 extStyle
+    class Disk storageStyle
+    class CacheLayer,PageCache cacheStyle
+      </code></pre>
+
+      <p>(If your blog platform supports Mermaid rendering, this will show as a nice colored diagram. Otherwise, check the full set in the repo’s README or <code>ARCHITECTURE.md</code>.)</p>
 
       <hr />
 
@@ -301,7 +392,7 @@ BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</c
 
       <p>See the chaos:<br />
       • Repo: <a href="https://github.com/mtm-007/One_Million_checboxes">github.com/mtm-007/One_Million_checboxes</a><br />
-      • <code>ARCHITECTURE.md</code> for diagrams<br />
+      • <code>ARCHITECTURE.md</code> for all diagrams (including toggle sequence, visitor flow, mindmap, pie/gantt metrics)<br />
       • <code>persistence.py</code> for the lifespan + backup dance<br />
       • <code>main.py</code> for Starlette bypass, blog route, and log file setup<br />
       • <code>style_v2.css</code> for the final visitor/blog fixes</p>

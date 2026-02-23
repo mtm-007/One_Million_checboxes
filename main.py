@@ -228,7 +228,7 @@ def web():# Start redis server locally inside the container (persisted to volume
     async def track_scroll(request):
         await analytics.update_scroll_depth(analytics.get_real_ip(request), (await request.json()).get("depth", 0), redis)
         return {"status": "ok"}
-    
+
     @web_app.post("/session-end")
     async def session_end(request):
         return await analytics.handle_session_end(request, redis)
