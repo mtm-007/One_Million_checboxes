@@ -305,19 +305,24 @@ async def render_time_spent_stats_page(redis):
                                     ("← Back to checkboxes", "/")), cls="visitors-container"))
 
 async def handle_heartbeat(request, redis):
-        """Track that user is still active and update duration"""
-        client_ip = get_real_ip(request)
-        try:
-            data = await request.json()
-            duration = data.get("duration", 0)  # Duration in seconds from frontend
-        except: duration = 0
-        await update_session_activity(client_ip, redis)
-        if duration > 0 and (visitor_data:=await redis.get(f"visitor:{client_ip}")):
-                visitor = json.loads(visitor_data)
-                visitor["current_session_duration"] = duration
-                visitor["last_activity_time"] = time.time()
-                await redis.set(f"visitor:{client_ip}", json.dumps(visitor) )
-        return {"status": "ok", "duration": duration}
+    client_ip = get_real_ip(request)
+    try:
+        data = await request.json()
+        duration = data.get("duration", 0)
+        actions = data.get("actions", 0)  # ✅ read actions
+    except: 
+        duration = 0
+        actions = 0
+    await update_session_activity(client_ip, redis)
+    
+    if (session_raw := await redis.get(f"session:{client_ip}")):
+        session = json.loads(session_raw)
+        session["actions"] = max(session.get("actions", 0), actions)  # ✅ save actions
+        if duration > 0:
+            session["current_session_duration"] = duration
+        await redis.set(f"session:{client_ip}", json.dumps(session), ex=3600)
+    
+    return {"status": "ok", "duration": duration}
 
 async def handle_session_end(request, redis):
         """End session and save final time spent"""
@@ -696,7 +701,7 @@ async def blog_visitors_page(redis, offset: int = 0, limit: int = 50):
             fh.Div(
                 fh.H1("📊 Blog Visitor Analytics"),
                 fh.A("← Back to Main Visitors", href="/visitors", cls="back-link"),
-                fh.A("← Back to Site", href="/", cls="back-link", style="margin-left:1.5rem;"),
+                fh.A("← Back to blog page", href="/blog", cls="back-link", style="margin-left:1.5rem;"),
                 # Stats cards – blog focused
                 fh.Div(
                     fh.Div( fh.Div("Unique Blog Visitors", cls="stat-label"), fh.Div(str(total_unique_blog), cls="stat-number"), cls="stat-card" ),

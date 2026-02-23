@@ -240,11 +240,17 @@ def web():# Start redis server locally inside the container (persisted to volume
         
     async def track_blog_view(request):
         client_ip = analytics.get_real_ip(request)
-        await analytics.track_page_view(client_ip, "/blog", "", redis)
+        user_agent = request.headers.get('user-agent', 'unknown')
+        referrer = request.headers.get('referer', '')
+        
+        # ✅ always ensure a session exists so heartbeat/session-end have somewhere to write
+        if not await redis.get(f"session:{client_ip}"):
+            await analytics.start_session(client_ip, user_agent, "/blog", redis)
+        
+        await analytics.track_page_view(client_ip, "/blog", referrer, redis)
+        await analytics.track_referrer(client_ip, referrer, redis)
         geo_data = await geo.get_geo(client_ip, redis)
-        await analytics.record_blog_visitor(client_ip,
-                                            request.headers.get('user-agent', 'unknown'),
-                                            geo_data, redis)
+        await analytics.record_blog_visitor(client_ip, user_agent, geo_data, redis, referrer)
         from starlette.responses import JSONResponse
         return JSONResponse({"status": "ok"})
 
