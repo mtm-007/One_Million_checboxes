@@ -48,11 +48,11 @@ graph TD
         
         subgraph Components["Core Components"]
             Routes[Routes / Handlers]
-            ClientMgr[Client Manager<br/>(diff queues)]
+            ClientMgr[Client Manager<br/> diff queues]
             GeoAPI[Geo API Layer]
             CacheLayer[Redis Cache Layer<br/>45s TTL for dashboards]
-            Metrics[Metrics Middleware<br/>(latency + throughput)]
-            Logging[File Logging<br/>(/logs/app.log)]
+            Metrics[Metrics Middleware<br/>latency + throughput]
+            Logging[File Logging<br/> /logs/app.log]
         end
     end
     
@@ -62,7 +62,7 @@ graph TD
         BlogVisitor[Blog Visitor Data<br/>Separate namespace]
         GeoCache[Geolocation Cache]
         PageCache[Page Cache<br/>visitors / referrer stats]
-        Sessions[Session Tracking<br/>(heartbeat + beacon)]
+        Sessions[Session Tracking<br/>heartbeat + beacon]
     end
     
     subgraph Ext_Layer["🌐 EXTERNAL APIS"]
@@ -72,7 +72,7 @@ graph TD
     end
     
     subgraph Storage_Layer["💿 STORAGE LAYER"]
-        Disk[Modal Volume<br/>/data (Redis RDB + SQLite)<br/>/logs (app.log)]
+        Disk[Modal Volume<br/>/data Redis RDB + SQLite<br/>/logs app.log]
     end
     
     %% Connections (same as before + new)
