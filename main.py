@@ -323,7 +323,7 @@ def web():# Start redis server locally inside the container (persisted to volume
         lifespan=lifespan,
         routes=[Route("/blog", raw_blog),
                 Route("/track-blog-view", track_blog_view, methods=["POST"]),
-                Route("/reset-blog-time", reset_blog_time),#temporarily added
+                #Route("/reset-blog-time", reset_blog_time),#temporarily added
                 Mount("/", app=web_app),]
         )
     

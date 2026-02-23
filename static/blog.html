@@ -168,7 +168,7 @@ nav.blog-nav {
     <a href="/" class="blog-nav-home">One Million Checkboxes 🧀</a>
     <div class="blog-nav-links">
       <a href="/visitors">Visitors</a>
-      <a href="https://github.com/mtm-007/one-million-checkboxes" target="_blank">GitHub ↗</a>
+      <a href="https://github.com/mtm-007/One_Million_checboxes" target="_blank">GitHub ↗</a>
     </div>
   </div>
 </nav>
@@ -176,152 +176,137 @@ nav.blog-nav {
 <div class="blog-container">
   <aside class="blog-sidebar">
     <div class="blog-sidebar-title">Table of Contents</div>
-    <ul><li><a href="#the-idea">The Idea</a></li>
-<li><a href="#the-stack">The Stack</a></li>
-<li><a href="#the-architecture">The Architecture</a></li>
-<li style="padding-left:12px;"><a href="#the-bitmap-trick">The Bitmap Trick</a></li>
-<li style="padding-left:12px;"><a href="#real-time-updates-without-websockets">Real-Time Updates Without WebSockets</a></li>
-<li style="padding-left:12px;"><a href="#system-design-overview">System Design Overview</a></li>
-<li><a href="#building-the-visitor-analytics-dashboard">Building the Visitor Analytics Dashboard</a></li>
-<li style="padding-left:12px;"><a href="#visitor-tracking-flow">Visitor Tracking Flow</a></li>
-<li style="padding-left:12px;"><a href="#session-tracking">Session Tracking</a></li>
-<li><a href="#the-page-cache-layer">The Page Cache Layer</a></li>
-<li><a href="#debugging-the-github-referrer-problem">Debugging the GitHub Referrer Problem</a></li>
-<li><a href="#takeaways">Takeaways</a></li>
-</ul>
+    <ul>
+      <li><a href="#the-core-idea">The Core Idea</a></li>
+      <li><a href="#the-bitmap-trick">The Bitmap Trick</a></li>
+      <li><a href="#real-time-without-websockets">Real-Time Without WebSockets</a></li>
+      <li><a href="#full-architecture">The Full Architecture</a></li>
+      <li><a href="#painful-adventures">The Painful Adventures & Bugs I Fixed</a></li>
+      <li><a href="#what-id-do-differently">What I’d Do Differently Next Time</a></li>
+      <li><a href="#takeaways">Takeaways After 227 Commits</a></li>
+    </ul>
   </aside>
 
   <div class="blog-article-col">
     <header class="blog-post-header">
       <h1>Building One Million Checkboxes</h1>
       <div class="blog-post-meta">
-        Feb 2025
+        Feb 23, 2026
         <span class="meta-sep">·</span>
-        8 min read
+        ~10 min read
         <span class="meta-sep">·</span>
         <span class="meta-tag">FastHTML</span>
         <span class="meta-tag">Redis</span>
         <span class="meta-tag">Modal</span>
+        <span class="meta-tag">HTMX</span>
       </div>
     </header>
 
-    <div class="blog-article"><h1 id="building-one-million-checkboxes-a-real-time-collaborative-app-with-fasthtml-redis-modal">Building One Million Checkboxes: A Real-Time Collaborative App with FastHTML, Redis &amp; Modal</h1>
-<p>A few weeks ago I built and deployed a real-time collaborative web app where anyone in the world can click any of one million checkboxes — and everyone else sees it update instantly. Along the way I learned a lot about architecture, serverless deployment, visitor analytics, and the surprisingly tricky world of referrer tracking. This post walks through the whole journey.</p>
-<hr />
-<h2 id="the-idea">The Idea</h2>
-<p>The concept is simple: one million checkboxes, shared state, live updates. Click one and every connected browser reflects the change in under a second. It sounds trivial until you think about the data — naively storing a million booleans as a JSON list costs around 8MB in memory. Multiply that by every read and write and it gets expensive fast.</p>
-<p>The app is live at <a href="https://mtm-007--fasthtml-checkboxes-web.modal.run/">mtm-007--fasthtml-checkboxes-web.modal.run</a> if you want to try it before reading further.</p>
-<hr />
-<h2 id="the-stack">The Stack</h2>
-<p>I chose four tools that worked together cleanly:</p>
-<p><strong>FastHTML</strong> — a Pythonic web framework that lets you build full-stack apps without leaving Python. No Jinja templates, no separate frontend build step. Components are just Python functions.</p>
-<p><strong>HTMX</strong> — lightweight JavaScript that handles interactivity through HTML attributes. Polling, lazy loading, out-of-band swaps — all without writing a single line of custom JS for the core UI.</p>
-<p><strong>Redis</strong> — the backbone of the whole thing. Not just for caching but as the primary data store for checkboxes, visitor data, geolocation cache, and page cache.</p>
-<p><strong>Modal</strong> — serverless hosting with auto-scaling and persistent volumes. CI/CD with GitHub Actions deploys straight to Modal on every push.</p>
-<hr />
-<h2 id="the-architecture">The Architecture</h2>
-<h3 id="the-bitmap-trick">The Bitmap Trick</h3>
-<p>The key insight that made this feasible is Redis bitmaps. Instead of storing a million booleans as a list or JSON, Redis lets you address individual bits inside a string. One million bits = <strong>125KB</strong>. That's it. Compare that to 8MB for a JSON list — a 64x reduction.</p>
-<pre><code>SETBIT checkboxes_bitmap 42 1   → check box #42
-GETBIT checkboxes_bitmap 42     → read box #42
-BITCOUNT checkboxes_bitmap      → count all checked boxes
-</code></pre>
-<p>Every toggle is a single Redis command. Every read is a single Redis command. The entire state of one million checkboxes fits in a single Redis key.</p>
-<h3 id="real-time-updates-without-websockets">Real-Time Updates Without WebSockets</h3>
-<p>Rather than setting up WebSockets, I used HTMX polling. Every browser polls <code>/diffs/{client_id}</code> every 500ms. The server maintains a diff queue per client — when any checkbox is toggled, that change gets added to every other client's queue. On the next poll, the client gets back just the changed checkboxes and updates them in place.</p>
-<p>The flow looks like this:</p>
-<ol>
-<li>User clicks checkbox #42</li>
-<li>Browser POSTs to <code>/toggle/42/{client_id}</code></li>
-<li>Server runs <code>GETBIT</code>, then <code>SETBIT</code> on the Redis bitmap</li>
-<li>Server adds <code>#42</code> to every other client's diff queue</li>
-<li>Server runs <code>BITCOUNT</code> and returns updated stats to the clicking browser</li>
-<li>Other browsers hit <code>/diffs/{client_id}</code> on their next 500ms poll</li>
-<li>Server returns the queued diff, browsers update checkbox #42</li>
-</ol>
-<p>This approach trades some latency (up to 500ms) for simplicity. No WebSocket infrastructure, no connection management, no reconnection logic.</p>
-<h3 id="system-design-overview">System Design Overview</h3>
-<pre><code>👥 CLIENT LAYER
-   Browsers (HTMX + Responsive CSS)
-        ↓ HTTP/HTMX
-🖥️ APPLICATION LAYER
-   FastHTML Web Server
-   ├── Routes / Handlers      → GETBIT/SETBIT/BITCOUNT on Bitmap
-   ├── Client Manager         → Diff queues per connected client
-   ├── Geo API Layer          → Fallback chain: ipwho.is → ipapi.co → ip-api.com
-   └── Redis Cache Layer      → 45s TTL for heavy pages like /visitors
+    <div class="blog-article">
+      <p>A few months ago I had a silly idea: build a real-time collaborative grid with <em>exactly one million checkboxes</em> — anyone on the internet clicks, everyone sees it instantly. No login, no accounts, pure shared chaos. It sounded simple. It absolutely was not.</p>
 
-💾 DATA LAYER (Redis)
-   ├── Bitmap (125KB)         → All 1M checkbox states
-   ├── Visitor Data           → Hash + Sorted Set per IP
-   ├── Geolocation Cache      → Avoids repeat API calls
-   └── Page Cache             → Pre-computed dashboard HTML
+      <p>The app is live right now at <a href="https://mtm-007--fasthtml-checkboxes-web.modal.run/">mtm-007--fasthtml-checkboxes-web.modal.run</a>. Go click a few. Someone across the world will see them flip. That still blows my mind.</p>
 
-💿 STORAGE LAYER
-   Modal Volume               → /data/dump.rdb + SQLite for persistence
-</code></pre>
-<hr />
-<h2 id="building-the-visitor-analytics-dashboard">Building the Visitor Analytics Dashboard</h2>
-<p>Once the core checkbox functionality was working I wanted to know who was using it. I built a full visitor tracking system that captures:</p>
-<ul>
-<li>IP address and geolocation (city, country, ISP, ZIP)</li>
-<li>Device type and OS (parsed from User-Agent)</li>
-<li>Classification: Human, Bot, VPN user, or Relay</li>
-<li>Referrer source and type (direct, social, search, referral)</li>
-<li>Time spent per session, scroll depth, page views, actions</li>
-<li>First and last referrer per visitor</li>
-</ul>
-<h3 id="visitor-tracking-flow">Visitor Tracking Flow</h3>
-<pre><code>New Visitor arrives
-      ↓
-Extract IP (CF-Connecting-IP header)
-      ↓
-Check Redis geo cache
-      ├── Cache hit  → use cached geo data
-      └── Cache miss → try ipwho.is → ipapi.co → ip-api.com (fallback chain)
-                             ↓
-                       Save to Redis geo cache
-      ↓
-Classify visitor (Human / Bot / VPN / Relay)
-      ↓
-Save/update visitor:{ip} hash in Redis
-      ↓
-Add to recent_visitors_sorted (sorted set by timestamp)
-      ↓
-Increment total_visitors_count (if new visitor)
-      ↓
-Save to SQLite for persistence across Redis restarts
-</code></pre>
-<h3 id="session-tracking">Session Tracking</h3>
-<p>Beyond just recording visits, I track how long people actually engage. A JavaScript tracker sends heartbeats every 10 seconds while the page is open, and fires a final <code>session-end</code> beacon on <code>beforeunload</code> using <code>navigator.sendBeacon</code> so it doesn't get cancelled when the tab closes.</p>
-<hr />
-<h2 id="the-page-cache-layer">The Page Cache Layer</h2>
-<pre><code class="language-python">cache_key = f&quot;cache:visitors:{offset}:{limit}:{days}&quot;
-cached = await redis.get(cache_key)
-if cached:
-    return json.loads(cached), &quot;cache-hit&quot;
+      <p>This is the full story — every terrible idea, every data-loss panic, every “why is Redis eating my visitors again?”, pulled straight from 227 commits, the code, <code>ARCHITECTURE.md</code> diagrams, and many cold-sweat debugging nights.</p>
 
-await redis.set(cache_key, json.dumps(result), ex=45)
-return result, &quot;cache-miss&quot;
-</code></pre>
-<hr />
-<h2 id="debugging-the-github-referrer-problem">Debugging the GitHub Referrer Problem</h2>
-<p>The root cause: <strong>GitHub renders READMEs inside an iframe with <code>referrerpolicy="no-referrer"</code></strong>.</p>
-<pre><code class="language-python">referrer = request.headers.get('referer', '')
-if not referrer and request.query_params.get('utm_source') == 'github':
-    referrer = 'https://github.com'
-</code></pre>
-<hr />
-<h2 id="takeaways">Takeaways</h2>
-<p>The <strong>bitmap trick</strong> is genuinely useful. 125KB vs 8MB is not a marginal improvement.</p>
-<p><strong>UTM parameters are not optional</strong> if you care about referrer attribution.</p>
-<p><strong>Modal + FastHTML is a genuinely fast way to ship Python web apps.</strong></p>
-<p>Give the checkboxes a click. Someone on the other side of the world will see it.</p></div>
+      <hr />
+
+      <h2 id="the-core-idea">The Core Idea (and Why Naïve Approaches Explode)</h2>
+
+      <p>Store one million booleans? Easy, right?<br /><strong>Wrong.</strong> A Python list or JSON blob ≈ 8 MB. Every toggle and render would murder memory and Redis. Thousands of concurrent visitors? Dead server.</p>
+
+      <h3 id="the-bitmap-trick">The Bitmap Trick That Saved Everything</h3>
+
+      <p>Redis bitmaps: 1,000,000 bits = <strong>exactly 125 KB</strong>.</p>
+      <pre><code>SETBIT checkboxes_bitmap 42069 1   → check #42,069
+GETBIT checkboxes_bitmap 42069     → read it
+BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</code></pre>
+
+      <p>One key, one command per toggle/read, tiny memory. This turned impossible into “runs happily on tiny Modal container”.</p>
+
+      <h2 id="real-time-without-websockets">Real-Time Without WebSockets (The HTMX Polling Hack)</h2>
+
+      <p>No WebSocket state, reconnections, heartbeats in prod. Instead: HTMX heresy.</p>
+
+      <ul>
+        <li>Every client polls <code>/diffs/{client_id}</code> every 500 ms</li>
+        <li>Toggle → server adds index to per-client diff queues</li>
+        <li>Next poll → client gets only changes, OOB swap</li>
+      </ul>
+
+      <p>Max 500 ms latency, zero server connection management, scales trivially. Still love this choice.</p>
+
+      <h2 id="full-architecture">The Full Architecture (What Actually Ships)</h2>
+
+      <ul>
+        <li><strong>Frontend</strong>: FastHTML + HTMX + responsive CSS (mobile-first, lazy-load 2,000-checkbox chunks)</li>
+        <li><strong>Backend</strong>: FastHTML (Python 3.12, async)</li>
+        <li><strong>State</strong>: Redis bitmap (hot path) + in-memory client dict + 45s page cache for dashboards</li>
+        <li><strong>Analytics</strong>: Geo fallback (ipwho.is → ipapi.co → ip-api.com), bot/VPN classification, referrer parsing (GitHub iframe fix), time-spent heartbeats, scroll-depth, actions</li>
+        <li><strong>Persistence</strong>: Modal volume + Redis RDB + SQLite backup/restore (saved me repeatedly)</li>
+        <li><strong>Deployment</strong>: Modal serverless + GitHub Actions CI/CD (zero-downtime auto-scaling)</li>
+      </ul>
+
+      <p>Full Mermaid diagrams and flows in <code>ARCHITECTURE.md</code> — sequence for toggles, visitor tracking flowchart, layer graph, performance Gantt/pie charts.</p>
+
+      <hr />
+
+      <h2 id="painful-adventures">The Painful Adventures & Bugs I Fixed</h2>
+
+      <ol>
+        <li><strong>“Redis overwrite ate my visitor data” (multiple times)</strong><br />Early Redis hashes, no backup. Redeploy → container dies → gone (even volumes if snapshot bad).<br /><strong>Fix</strong>: <code>persistence.py</code> SQLite backup on shutdown + restore on startup. Feb 23 commit: “blog visitors record lost issue fixed with adding lifespan on starlette” — moved to Starlette lifespan (not old web_app hooks).</li>
+
+        <li><strong>GitHub Referrer Black Hole</strong><br />README traffic showed “Direct”. GitHub iframes use <code>referrerpolicy="no-referrer"</code>.<br /><strong>Fix</strong>: UTM in README link + code fallback. Now correctly “social referral”.</li>
+
+        <li><strong>Mermaid Diagram Nightmares in README</strong><br />### NEW comments break parser, parentheses → stadium nodes, en-dashes in ranges illegal, → arrows fail.<br />Many commits: “fix mermaid again”, “check updated readme”.</li>
+
+        <li><strong>Blog Visitors Tracking Saga (Feb 21–23 2026)</strong><br />Added blog tracking (scroll, actions, time spent, referrer) → explosion: wrong time math, scroll not persisting, HTML vs FastHTML bugs, parenthesis typos, shutdown loss.<br /><strong>Fixes</strong>: Starlette lifespan, heartbeat + beforeunload beacon, chunk scroll math. Commits: “fix time spent and scroll in blog visits”, “temporary reset for total time spent error”, “getting the scroll and actions data”.</li>
+
+        <li><strong>Refactoring Hell & Code Archaeology</strong><br />Scattered files: <code>one_M_checkboxes_old.py</code>, prototypes, logs. Moved to <code>checkboxes_v0/</code>, <code>monetization_prop/</code>. Early JSON lists → nightmares. Commits cleaning up, fewer lines.</li>
+
+        <li><strong>Serverless Gotchas on Modal</strong><br />Redis as subprocess, forced <code>volume.commit.aio()</code> on shutdown, logs survival, multi-container Redis sharing (client manager graceful).</li>
+      </ol>
+
+      <h2 id="what-id-do-differently">What I’d Do Differently Next Time</h2>
+
+      <ul>
+        <li>Redis Pub/Sub over polling → instant, less chatty</li>
+        <li>Rate limiting (Redis token bucket per IP)</li>
+        <li>Separate analytics DB (Redis great for bitmap, overkill for history)</li>
+        <li>Cloudflare bot management upstream</li>
+        <li>Pre-commit hooks day one (parenthesis ghosts haunt me)</li>
+      </ul>
+
+      <h2 id="takeaways">Takeaways After 227 Commits</h2>
+
+      <ul>
+        <li><strong>Bitmaps are magic</strong>. Millions of booleans? Redis bitmaps first.</li>
+        <li><strong>Referer header lies</strong>. Ship UTM always.</li>
+        <li><strong>Serverless + volumes incredible</strong>, but master shutdown/lifespan.</li>
+        <li><strong>FastHTML + HTMX stupidly productive</strong>. Full-stack Python, no build step. Joy.</li>
+        <li><strong>Persistence never afterthought</strong>. SQLite backup/restore saved me repeatedly.</li>
+        <li><strong>Small bugs compound</strong>. Missing await, extra parenthesis, aggressive TTL → lying analytics.</li>
+      </ul>
+
+      <p>Started as weekend toy, became masterclass in system design, load debugging, fast shipping with modern Python.</p>
+
+      <p>See the chaos:<br />
+      • Repo: <a href="https://github.com/mtm-007/One_Million_checboxes">github.com/mtm-007/One_Million_checboxes</a><br />
+      • <code>ARCHITECTURE.md</code> for diagrams<br />
+      • <code>persistence.py</code> for backup/restore dance<br />
+      • <code>main.py</code> for bitmap + diff queue magic</p>
+
+      <p>Go click some boxes. Leave it more chaotic. Build something similar? Drop a link — I want to see your lessons.</p>
+
+      <p>Happy hacking,<br />
+      mera<br />
+      (Feb 23, 2026 — after yet another “fix time spent and scroll in blog visits” commit)</p>
+    </div>
 
     <footer class="blog-footer">
       <a href="/visitors">← Back to Visitors</a>
       <a href="/">← Back to Checkboxes</a>
-      <a href="https://github.com/mtm-007/one-million-checkboxes" target="_blank">View Source ↗</a>
+      <a href="https://github.com/mtm-007/One_Million_checboxes" target="_blank">View Source ↗</a>
     </footer>
   </div>
 </div>
@@ -359,15 +344,6 @@ if not referrer and request.query_params.get('utm_source') == 'github':
             window.addEventListener('beforeunload', () => { this.endSession(); });
             window.addEventListener('pagehide', () => { this.endSession(); });
         },
-        // logAction() {
-        //     this.actionCount = (this.actionCount || 0) + 1;
-        //     fetch('/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'},
-        //         body: JSON.stringify({ duration: (Date.now() - this.startTime) / 1000, 
-        //                             actions: this.actionCount,
-        //                             timestamp: Date.now() }), keepalive: true
-        //     }).catch(() => {});
-        // },
-    
         sendHeartbeat() {
             const duration = (Date.now() - this.startTime) / 1000;
             fetch('/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'},

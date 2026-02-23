@@ -1,244 +1,62 @@
-# Building One Million Checkboxes: A Real-Time Collaborative App with FastHTML, Redis & Modal
+Building One Million Checkboxes: My Wild Journey with FastHTML, Redis Bitmaps, Modal, and 227 Commits of Pure Chaos (and Learning)A few months ago I had a silly idea: what if I built a real-time collaborative grid with exactly one million checkboxes that anyone on the internet could click — and everyone else would see the change instantly? No accounts, no login, just pure shared state. It sounded simple. It was not.The app is live right now at mtm-007--fasthtml-checkboxes-web.modal.run. Go click a few boxes. Someone halfway across the world will see them flip. That still blows my mind.This post is the full story — every bad idea, every data-loss incident, every “why is Redis eating my visitors again?” moment, and every win. Pulled straight from 227 commits, the code, the architecture diagrams, and the cold-sweat debugging sessions.The Core Idea (and Why Naïve Approaches Explode)Store one million booleans? Easy, right?
+Wrong. A plain Python list or JSON blob would be ~8 MB. Every toggle and every render would hammer memory and Redis. Multiply by thousands of concurrent visitors and you’re dead.The bitmap trick that saved everything (Redis SETBIT/GETBIT/BITCOUNT):1,000,000 bits = exactly 125 KB.
+SETBIT checkboxes_bitmap 42069 1 → check box #42,069
+GETBIT to read
+BITCOUNT for live “X of 1,000,000 checked” stats
+
+This single insight turned an impossible memory hog into something that runs happily on a tiny Modal container.Real-Time Without WebSockets (The HTMX Polling Hack)I didn’t want to manage WebSocket connections, reconnections, or heartbeats in production. So I went full HTMX heresy:Every client polls /diffs/{client_id} every 500 ms.
+When anyone toggles a box, the server adds that index to a tiny per-client diff queue.
+Next poll → client gets just the changed boxes and does an OOB swap.
+
+Latency max 500 ms, zero WebSocket state on the server, trivial scaling. I still love this decision.The Full Architecture (What Actually Ships)Frontend: Pure FastHTML + HTMX + responsive CSS (mobile-first, lazy-loads 2,000-checkbox chunks).
+Backend: FastHTML (Python 3.12, async everywhere).
+State: Redis bitmap (hot path) + in-memory client dict + 45-second page cache for heavy dashboards.
+Analytics: Visitor tracking with geo fallback chain (ipwho.is → ipapi.co → ip-api.com), bot/VPN classification, referrer parsing (with special GitHub iframe handling), time-spent heartbeats, scroll-depth via lazy chunks, action counting.
+Persistence: Modal volume + Redis RDB + SQLite backup/restore for visitor data (critical after I lost everything on the first redeploy).
+Deployment: Modal serverless + GitHub Actions CI/CD (zero-downtime, auto-scaling).
+
+(Full Mermaid diagrams are in ARCHITECTURE.md if you want the pretty pictures.)The Painful Adventures & Bugs I Fixed1. “Redis cache overwrite ate my visitor data” (multiple times)
+Early versions used Redis hashes for visitors with no backup. Redeploy → container dies → Redis data gone (even with volume if snapshot timing was bad).
+Fix: persistence.py now does full SQLite backup on shutdown + restore on startup. Recent commits added Starlette lifespan handlers (outside the old web_app startup/shutdown) so blog visitor records survive restarts. I literally have a commit titled “blog visitors record lost issue fixed with adding lifespan on startlette”.2. GitHub Referrer Black Hole
+Traffic from the README showed as “Direct”. Root cause: GitHub renders READMEs in an iframe with referrerpolicy="no-referrer". No Referer header ever reaches the app.
+Fix: UTM parameters in the README link + fallback logic in code. Now GitHub traffic correctly shows as social referral. Tiny change, huge relief.3. Mermaid Diagram Nightmares in README
+I learned the hard way:### NEW comments inside Mermaid code blocks break the parser.
+Parentheses in edge labels → “stadium node” syntax error.
+3000–5000 ranges in Gantt charts are illegal.
+→ arrows in labels cause parse failures.
+
+Every time I updated ARCHITECTURE.md the rendered README looked broken. Many commits were “fix mermaid again”.4. Blog Visitors Tracking Saga (Feb 21–23 2026 commits)
+When I added the blog post page itself with full tracking (scroll depth, actions, time spent, referrer), everything exploded:Time-spent calculation errors → temporary reset commit because math was wrong on shutdown.
+Scroll data not persisting.
+Plain HTML rendering vs FastHTML override bugs.
+Extra parenthesis typos breaking routes.
+“blog visitors history persistence on shutdown” attempts.
+
+The final fixes: proper Starlette lifespan, heartbeat + beforeunload beacon, chunk-based scroll math. I now track how deep people read this very post.5. Refactoring Hell & Code Archaeology
+I had one_M_checkboxes_old.py, random prototyping scripts, logs, database dumps scattered everywhere. Multiple commits just moving stuff into checkboxes_v0/, monetization_prop/, cleaning up, reducing line count. Early prototypes used JSON lists — I still have nightmares.6. Serverless Gotchas on Modal  Starting Redis server as subprocess inside the container.
+Forcing volume commits on shutdown (volume.commit.aio()).
+Making sure logs survive (logs_volume.commit).
+Auto-scaling containers sharing the same Redis (client manager had to handle multiple instances gracefully).
+
+What I’d Do Differently Next TimeSwitch to Redis Pub/Sub instead of polling (instant updates, less chatty).
+Proper rate limiting per IP (Redis token bucket).
+Separate analytics DB (Redis is perfect for the bitmap, overkill for visitor history).
+Add Cloudflare bot management upstream.
+Enforce pre-commit hooks from day one (that stray parenthesis still haunts me).
+
+Takeaways After 227 CommitsBitmaps are magic. Any time you have millions of booleans, reach for Redis bitmaps immediately.
+The Referer header is a lie. Always ship UTM parameters.
+Serverless + persistent volumes is incredible but you must understand shutdown/lifespan semantics.
+FastHTML + HTMX is stupidly productive. I wrote the entire frontend and backend in Python. No separate build step. Pure joy.
+Persistence is never an afterthought. The SQLite backup/restore saved me more times than I can count.
+Small bugs compound. One missing await, one extra parenthesis, one cache TTL that’s too aggressive — and suddenly your analytics are lying to you.
+
+The project started as a weekend toy and turned into a masterclass in real-world system design, debugging under load, and shipping fast with modern Python tools.If you want to see the chaos for yourself:Full repo: https://github.com/mtm-007/One_Million_checboxes
+ARCHITECTURE.md for diagrams
+persistence.py for the backup/restore dance
+main.py for the core bitmap + diff queue magic
+
+Go click some boxes. Leave the grid a little more chaotic than you found it. And if you build something similar, drop me a link — I’d love to see what you learned.Happy hacking,
+mera
+(Feb 23, 2026 — after yet another “fix time spent and scroll in blog visits” commit)
 
-A few weeks ago I built and deployed a real-time collaborative web app where anyone in the world can click any of one million checkboxes — and everyone else sees it update instantly. Along the way I learned a lot about architecture, serverless deployment, visitor analytics, and the surprisingly tricky world of referrer tracking. This post walks through the whole journey.
-
----
-
-## The Idea
-
-The concept is simple: one million checkboxes, shared state, live updates. Click one and every connected browser reflects the change in under a second. It sounds trivial until you think about the data — naively storing a million booleans as a JSON list costs around 8MB in memory. Multiply that by every read and write and it gets expensive fast.
-
-The app is live at [mtm-007--fasthtml-checkboxes-web.modal.run](https://mtm-007--fasthtml-checkboxes-web.modal.run/) if you want to try it before reading further.
-
----
-
-## The Stack
-
-I chose four tools that worked together cleanly:
-
-**FastHTML** — a Pythonic web framework that lets you build full-stack apps without leaving Python. No Jinja templates, no separate frontend build step. Components are just Python functions.
-
-**HTMX** — lightweight JavaScript that handles interactivity through HTML attributes. Polling, lazy loading, out-of-band swaps — all without writing a single line of custom JS for the core UI.
-
-**Redis** — the backbone of the whole thing. Not just for caching but as the primary data store for checkboxes, visitor data, geolocation cache, and page cache.
-
-**Modal** — serverless hosting with auto-scaling and persistent volumes. CI/CD with GitHub Actions deploys straight to Modal on every push.
-
----
-
-## The Architecture
-
-### The Bitmap Trick
-
-The key insight that made this feasible is Redis bitmaps. Instead of storing a million booleans as a list or JSON, Redis lets you address individual bits inside a string. One million bits = **125KB**. That's it. Compare that to 8MB for a JSON list — a 64x reduction.
-
-```
-SETBIT checkboxes_bitmap 42 1   → check box #42
-GETBIT checkboxes_bitmap 42     → read box #42
-BITCOUNT checkboxes_bitmap      → count all checked boxes
-```
-
-Every toggle is a single Redis command. Every read is a single Redis command. The entire state of one million checkboxes fits in a single Redis key.
-
-### Real-Time Updates Without WebSockets
-
-Rather than setting up WebSockets, I used HTMX polling. Every browser polls `/diffs/{client_id}` every 500ms. The server maintains a diff queue per client — when any checkbox is toggled, that change gets added to every other client's queue. On the next poll, the client gets back just the changed checkboxes and updates them in place.
-
-The flow looks like this:
-
-1. User clicks checkbox #42
-2. Browser POSTs to `/toggle/42/{client_id}`
-3. Server runs `GETBIT`, then `SETBIT` on the Redis bitmap
-4. Server adds `#42` to every other client's diff queue
-5. Server runs `BITCOUNT` and returns updated stats to the clicking browser
-6. Other browsers hit `/diffs/{client_id}` on their next 500ms poll
-7. Server returns the queued diff, browsers update checkbox #42
-
-This approach trades some latency (up to 500ms) for simplicity. No WebSocket infrastructure, no connection management, no reconnection logic.
-
-### System Design Overview
-
-```
-👥 CLIENT LAYER
-   Browsers (HTMX + Responsive CSS)
-        ↓ HTTP/HTMX
-🖥️ APPLICATION LAYER
-   FastHTML Web Server
-   ├── Routes / Handlers      → GETBIT/SETBIT/BITCOUNT on Bitmap
-   ├── Client Manager         → Diff queues per connected client
-   ├── Geo API Layer          → Fallback chain: ipwho.is → ipapi.co → ip-api.com
-   └── Redis Cache Layer      → 45s TTL for heavy pages like /visitors
-
-💾 DATA LAYER (Redis)
-   ├── Bitmap (125KB)         → All 1M checkbox states
-   ├── Visitor Data           → Hash + Sorted Set per IP
-   ├── Geolocation Cache      → Avoids repeat API calls
-   └── Page Cache             → Pre-computed dashboard HTML
-
-💿 STORAGE LAYER
-   Modal Volume               → /data/dump.rdb + SQLite for persistence
-```
-
----
-
-## Building the Visitor Analytics Dashboard
-
-Once the core checkbox functionality was working I wanted to know who was using it. I built a full visitor tracking system that captures:
-
-- IP address and geolocation (city, country, ISP, ZIP)
-- Device type and OS (parsed from User-Agent)
-- Classification: Human, Bot, VPN user, or Relay
-- Referrer source and type (direct, social, search, referral)
-- Time spent per session, scroll depth, page views, actions
-- First and last referrer per visitor
-
-### Visitor Tracking Flow
-
-```
-New Visitor arrives
-      ↓
-Extract IP (CF-Connecting-IP header)
-      ↓
-Check Redis geo cache
-      ├── Cache hit  → use cached geo data
-      └── Cache miss → try ipwho.is → ipapi.co → ip-api.com (fallback chain)
-                             ↓
-                       Save to Redis geo cache
-      ↓
-Classify visitor (Human / Bot / VPN / Relay)
-      ↓
-Save/update visitor:{ip} hash in Redis
-      ↓
-Add to recent_visitors_sorted (sorted set by timestamp)
-      ↓
-Increment total_visitors_count (if new visitor)
-      ↓
-Save to SQLite for persistence across Redis restarts
-```
-
-The classification logic checks the User-Agent against a known bots dictionary, flags hosting provider IPs as Bot/Server, and checks the geo API response for VPN and relay flags.
-
-### Session Tracking
-
-Beyond just recording visits, I track how long people actually engage. A JavaScript tracker sends heartbeats every 10 seconds while the page is open, and fires a final `session-end` beacon on `beforeunload` using `navigator.sendBeacon` so it doesn't get cancelled when the tab closes.
-
-Scroll depth is tracked by counting how many lazy-loaded chunks of checkboxes the user has triggered — since the grid loads in 500-chunk batches of 2,000 checkboxes each, I can calculate percentage scroll depth from chunk load count.
-
----
-
-## The Page Cache Layer
-
-The `/visitors` dashboard is expensive to compute. It aggregates data across hundreds of visitor records, groups by day, computes chart data, calculates stats. Doing that on every request would be slow and wasteful.
-
-I added a Redis page cache layer with a 45-second TTL:
-
-```python
-cache_key = f"cache:visitors:{offset}:{limit}:{days}"
-cached = await redis.get(cache_key)
-if cached:
-    return json.loads(cached), "cache-hit"
-
-# ... expensive computation ...
-
-await redis.set(cache_key, json.dumps(result), ex=45)
-return result, "cache-miss"
-```
-
-Cache hits return in ~10ms. Cache misses take 3-5 seconds. For a dashboard that updates every 45 seconds anyway, this is a great tradeoff.
-
----
-
-## Debugging the GitHub Referrer Problem
-
-After launching, I noticed that visitors coming from my GitHub README weren't showing up as GitHub referrals — they were all showing as Direct traffic. This was frustrating since I had added referrer tracking specifically to understand where traffic was coming from.
-
-The root cause: **GitHub renders READMEs inside an iframe with `referrerpolicy="no-referrer"`**. This means the browser deliberately sends no `Referer` header when someone clicks a link from a GitHub README. There's nothing to track.
-
-The fix is UTM parameters. Instead of relying on the `Referer` header, embed tracking info directly in the URL:
-
-```
-https://myapp.com/?utm_source=github&utm_medium=readme&utm_campaign=one-million-checkboxes
-```
-
-Then in the server code, fall back to UTM params when the header is empty:
-
-```python
-referrer = request.headers.get('referer', '')
-
-# UTM fallback — GitHub strips the Referer header
-if not referrer and request.query_params.get('utm_source') == 'github':
-    referrer = 'https://github.com'
-```
-
-Once `https://github.com` is reconstructed as the referrer, the existing `parse_referrer` function picks it up correctly — as long as `github.com` is in your social platforms dictionary:
-
-```python
-social_platforms = {
-    ...
-    "github.com": "GitHub",
-}
-```
-
-Two small changes, and GitHub traffic now shows up correctly as a social referral source.
-
----
-
-## README Rendering Issues
-
-Documenting the architecture in the README with Mermaid diagrams introduced its own set of bugs. A few things I learned the hard way:
-
-**Inline `### comments` break Mermaid.** I was annotating new features with `### NEW` inline in diagram code blocks. Mermaid has no concept of inline comments — `###` starts a heading in Markdown but means nothing to the Mermaid parser, which just chokes on it. Fix: remove them entirely or use `%%` Mermaid comments on their own line.
-
-**Parentheses in edge labels break graph diagrams.** This line:
-
-```
-PageCache -->|Ephemeral (optional persist)| Disk
-```
-
-...caused a parse error because the Mermaid parser sees `(` as the start of a stadium-shaped node. Fix: replace parentheses with a dash.
-
-```
-PageCache -->|Ephemeral - optional persist| Disk
-```
-
-**Gantt charts need single numeric end values.** I had written `3000–5000` as a range for a task duration. The `dateFormat X` gantt mode expects a single integer. Fix: pick one number.
-
-**Special characters in gantt labels cause issues.** The `→` arrow character in task labels like `Cache Hit → Fast Render` can trip up the parser. Fix: replace with `-`.
-
----
-
-## CI/CD with GitHub Actions
-
-Every push to main triggers a GitHub Actions workflow that deploys directly to Modal. The pipeline runs tests, then calls `modal deploy` with the production app. Modal handles spinning up new containers, draining old ones, and keeping the persistent volume mounted throughout. Zero-downtime deploys with no manual steps.
-
----
-
-## What I'd Do Differently
-
-**Use Redis Pub/Sub instead of polling.** The 500ms poll interval works fine but it's chatty. Pub/Sub would push updates to clients immediately and reduce unnecessary requests when nothing has changed.
-
-**Add rate limiting per IP.** Right now anyone can spam toggles. A simple Redis-based token bucket per IP would prevent abuse.
-
-**Separate the analytics database.** Using Redis for both the hot checkbox state and the analytics data means they share memory. For production I'd move visitor data to a proper database and keep Redis purely for the real-time checkbox state.
-
-**Better bot filtering upstream.** Most of my "visitors" are crawlers and bots. Cloudflare's bot management or even a simple honeypot field would clean up the analytics significantly.
-
----
-
-## Takeaways
-
-Building this taught me a few things worth remembering:
-
-The **bitmap trick** is genuinely useful any time you need to track large sets of boolean states efficiently. 125KB vs 8MB is not a marginal improvement.
-
-**UTM parameters are not optional** if you care about referrer attribution. The `Referer` header is unreliable — stripped by privacy browsers, iframe policies, HTTPS-to-HTTP transitions. Build UTM tracking from day one.
-
-**Mermaid diagrams in READMEs are worth the effort** but have real parser quirks. Test them locally with a Mermaid live editor before committing, especially if you're adding special characters or inline annotations.
-
-**Modal + FastHTML is a genuinely fast way to ship Python web apps.** No Dockerfiles, no infrastructure config, just Python and a deploy command.
-
----
-
-The full source code is on GitHub. If you want to dig into the bitmap implementation, the visitor tracking pipeline, or the HTMX polling pattern, everything is there.
-
-Give the checkboxes a click. Someone on the other side of the world will see it.
