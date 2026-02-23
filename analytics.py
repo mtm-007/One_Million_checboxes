@@ -1,12 +1,14 @@
+from enum import unique
 import json
 import time
 import hashlib
 from typing import Dict, Any, Tuple
-import persistence
+import persistence, geo
 import config
 import fasthtml.common as fh
 import fasthtml_components
 from datetime import datetime, timezone, timedelta
+from starlette.responses import JSONResponse
 import datetime as dt
 
 async def get_user_events(client_ip: str, redis, limit: int =20):
@@ -82,52 +84,56 @@ async def track_page_view(client_ip: str, page: str, referrer: str, redis):
     now = time.time()
     is_blog = page == "/blog"
 
+    # ─── Common session & visitor updates ───
     for key, updater in [
-        (f"session:{client_ip}", lambda d: d.update({"page_views": d.get("page_views",[])+[{"page":page,"timestamp":time.time()}], "last_activity":time.time()}) or d),
-        (f"visitor:{client_ip}", lambda d: d.update({"pages_viewed": {**d.get("pages_viewed",{}), page: d.get("pages_viewed",{}).get(page,0)+1},
-            "last_page":page, "total_page_views":d.get("total_page_views",0)+1,
-            **({"referrers": list(set(d.get("referrers",[])+[referrer]))} if referrer else {})}) or d)]:
+        (f"session:{client_ip}", lambda d: d.update({
+            "page_views": d.get("page_views", []) + [{"page": page, "timestamp": time.time()}],
+            "last_activity": time.time()
+        }) or d),
+        (f"visitor:{client_ip}", lambda d: d.update({
+            "pages_viewed": {**d.get("pages_viewed", {}), page: d.get("pages_viewed", {}).get(page, 0) + 1},
+            "last_page": page,
+            "total_page_views": d.get("total_page_views", 0) + 1,
+            **({"referrers": list(set(d.get("referrers", []) + [referrer]))} if referrer else {})
+        }) or d)
+    ]:
         if (raw := await redis.get(key)):
             d = updater(json.loads(raw))
-            await redis.set(key, json.dumps(d), **({"ex":3600} if "session" in key else {}))
-    
+            await redis.set(
+                key,
+                json.dumps(d),
+                **({"ex": 3600} if "session" in key else {})
+            )
+
+    # ─── Blog-specific tracking ───
     if is_blog:
-        print(f"[DEBUG-TRACK] Adding to blog:visits:by_time for {client_ip}")
+        print(f"[BLOG-TRACK] Recording blog view for {client_ip} at {now:.0f}")
 
         pipe = redis.pipeline()
         pipe.incr("blog:total_views")
         pipe.sadd("blog:unique_ips", client_ip)
-        visit_key = f"{client_ip}:{int(now)}"
-        pipe.zadd("blog:visits:by_time", {visit_key: now})
+
+        pipe.zadd("blog:visits:by_last_time", {client_ip: now})
+
         try:
-            await pipe.execute()   # ← must be awaited!
-            # Invalidate blog visitors cache so next load is fresh
-            cache_keys = await redis.keys("cache:blog_visitors:*")
-            for k in cache_keys:
+            await pipe.execute()
+            # Invalidate cache (if you use caching)
+            for k in await redis.keys("cache:blog_visitors:*"):
                 await redis.delete(k)
-            print("[DEBUG-TRACK] Blog pipeline EXECUTED successfully")
-            after_count = await redis.zcard("blog:visits:by_time")
-            print(f"[DEBUG-TRACK] After write → blog:visits:by_time has {after_count} entries")
-            print(f"[DEBUG-TRACK] Successfully added blog visit entry")
+
+            print("[BLOG-TRACK] Pipeline executed successfully")
+
+            count = await redis.zcard("blog:visits:by_last_time")
+            print(f"[BLOG-TRACK] blog:visits:by_last_time now contains {count} unique IPs")
+
+            last_ts = await redis.zscore("blog:visits:by_last_time", client_ip)
+            if last_ts:
+                print(f"[BLOG-TRACK] Last blog visit for {client_ip}: {last_ts:.0f}")
+
         except Exception as e:
             print(f"[ERROR-TRACK] Blog pipeline failed: {e}")
-    print(f"[PAGE VIEW] {client_ip} viewed {page}{' (BLOG)' if is_blog else ''}")   # ← improved log
 
-
-# async def track_referrer(client_ip: str, referrer: str, redis):
-#     if not referrer: referrer = "direct"
-#     parsed = parse_referrer(referrer)
-#     if (vd := await redis.get(f"visitor:{client_ip}")):
-#         v = json.loads(vd)
-#         v.setdefault("first_referrer", parsed); v.setdefault("first_referrer_time", time.time())
-#         v["last_referrer"] = parsed; v["last_referrer_time"] = time.time()
-#         refs = v.setdefault("all_referrers", [])
-#         if not refs or refs[-1]["source"] != parsed["source"]:
-#             refs.append({"source":parsed["source"],"type":parsed["type"],"timestamp":time.time()})
-#             v["all_referrers"] = refs[-20:]
-#         await redis.set(f"visitor:{client_ip}", json.dumps(v))
-#     await redis.incr(f"referrer_stats:{parsed['source']}")
-#     print(f"[REFERRER] {client_ip} came from {parsed['source']} ({parsed['type']})")
+    print(f"[PAGE VIEW] {client_ip} viewed {page}{' (BLOG)' if is_blog else ''}")
 
 async def track_referrer(client_ip: str, referrer: str, redis):
     if not referrer:
@@ -508,202 +514,159 @@ async def render_visitors_page(request, redis, offset: int = 0, limit: int = 5, 
                 fasthtml_components.pagination(offset, limit, total_in_db, "/visitors", {"days": days}),
                 fasthtml_components.nav_links(("← Back to checkboxes", "/")), cls="visitors-container"))
 
+async def record_blog_visitor(ip, user_agent, geo, redis):
+    try:
+        existing = await redis.get(f"blog_visitor:{ip}")  # separate namespace
+        ua_l = user_agent.lower()
+        
+        classification = (next((n for k,n in config.BOTS.items() if k in ua_l), None) or
+                         ("Script/Scraper" if any(s in ua_l for s in ["python-requests","aiohttp","curl","wget","postman","headless"]) else
+                          "Bot/Server" if geo.get("is_hosting") else
+                          "Human (Privacy/Relay)" if geo.get("is_relay") else "Human"))
+        existing_data = json.loads(existing) if existing else {}
+        entry = {**existing_data, "ip": ip, "device": get_device_info(user_agent), "user_agent": user_agent[:120],
+                 "classification": classification, "isp": geo.get("isp") or "-",
+                 "city": geo.get("city") or geo.get("region", "Unknown"),
+                 "country": geo.get("country") or geo.get("country_name"),
+                 "is_vpn": geo.get("is_vpn", False),
+                 "timestamp": time.time(),
+                 "visit_count": (existing_data.get("visit_count", 1) + 1) if existing else 1}
+        
+        await redis.set(f"blog_visitor:{ip}", json.dumps(entry))  # separate namespace
+        # Does NOT touch recent_visitors_sorted
+        print(f"[BLOG-VISITOR] {geo.get('city')}, {geo.get('country')} | {classification}")
+    except Exception as e:
+        print(f"[ERROR] record_blog_visitor: {e}")
 
-async def get_cached_blog_visitors_data(redis, offset: int, limit: int, days: int) -> tuple[dict, str]:
-    cache_key = f"cache:blog_visitors:{offset}:{limit}:{days}"
+async def blog_visitors_page(redis, offset: int = 0, limit: int = 50):
+    """Display statistics and recent visitors who viewed the blog"""
+    print(f"[BLOG-VISITORS] Loading: offset={offset}, limit={limit}")
+    total_blog_views_raw = await redis.get("blog:total_views")
+    total_blog_views = int(total_blog_views_raw.decode('utf-8')) if total_blog_views_raw else 0
+    total_unique_blog = await redis.scard("blog:unique_ips") or 0
+    fetch_limit = offset + limit + 20  # small buffer in case of dups/malformed
+    
+    recent_ips_bytes = await redis.zrevrange("blog:visits:by_last_time", 0, fetch_limit -1)
+    ordered_ips = [ip.decode('utf-8') for ip in recent_ips_bytes]
+    paginated_ips = ordered_ips[offset : offset + limit]
 
-    cached = await redis.get(cache_key)
-    if cached:
-        try:
-            return json.loads(cached), "cache-hit"
-        except:
-            await redis.delete(cache_key)
-
-    # Fetch from GLOBAL recent_visitors_sorted (proven to persist)
-    # Over-fetch to allow filtering
-    fetch_limit = offset + limit * 5  # generous over-fetch
-    recent_ips = await redis.zrange("recent_visitors_sorted", 0, fetch_limit - 1, desc=True)
-    print(f"[BLOG VISITORS] Fetched {len(recent_ips)} global recent IPs for filtering")
-
+    # ─── Step 3: Load visitor details & filter only real blog viewers ───
     visitors = []
-    for ip_bytes in recent_ips:
-        ip = ip_bytes.decode('utf-8') if isinstance(ip_bytes, bytes) else str(ip_bytes)
-        raw = await redis.get(f"visitor:{ip}")
-        if raw:
-            try:
-                v = json.loads(raw.decode('utf-8') if isinstance(raw, bytes) else raw)
-                # Filter: only include if they viewed /blog
-                if v.get("pages_viewed", {}).get("/blog", 0) > 0:
-                    ts = float(v.get("last_seen", v.get("timestamp", time.time())))
-                    v["timestamp"] = ts
-                    visitors.append(v)
-                    print(f"[DEBUG-BLOG] Included visitor {ip} (pages_viewed has /blog)")
-                # else:
-                #     print(f"[DEBUG-BLOG] Skipped {ip} - no /blog in pages_viewed")
-            except Exception as e:
-                print(f"[BLOG VISITORS] JSON error for {ip}: {e}")
+    for ip in paginated_ips:
+        raw = await redis.get(f"blog_visitor:{ip}")
+        if not raw: continue
+        try:
+            v = json.loads(raw)
+            #if v.get("pages_viewed", {}).get("/blog", 0) > 0:
+            v["timestamp"] = float(v.get("last_action_time", v.get("timestamp", time.time())))
+            visitors.append(v)
+        except Exception as e:
+            print(f"[BLOG-VISITORS] Parse error for {ip}: {e}")
 
-    # Apply offset & limit AFTER filtering
-    visitors = visitors[offset : offset + limit]
+    total_in_db_approx = await redis.zcard("blog:visits:by_last_time") #len(ordered_ips)
 
-    print(f"[BLOG VISITORS] Loaded {len(visitors)} valid blog visitors after filter")
-
-    # ─── Identical processing as main visitors ──────────────────────────────────
-    visitors_by_day = {}
-    for v in visitors:
-        day = utc_to_local(v["timestamp"]).strftime("%Y-%m-%d")
-        visitors_by_day.setdefault(day, []).append(v)
-
-    now_local = utc_to_local(time.time())
-    chart_days_data = []
-    for i in range(days - 1, -1, -1):
-        target_date = (now_local.date() - dt.timedelta(days=i)).strftime("%Y-%m-%d")
-        count = sum(1 for v in visitors if utc_to_local(v["timestamp"]).strftime("%Y-%m-%d") == target_date)
-        date_display = (now_local.date() - dt.timedelta(days=i)).strftime("%a-%b-%d")
-        chart_days_data.append((date_display, count))
-
-    humans = sum(1 for v in visitors if "Human" in v.get("classification", ""))
-    bots = len(visitors) - humans
-    vpn_users = sum(1 for v in visitors if v.get("is_vpn", False))
-
-    # Totals: filtered count for "showing", global unique blog for headline
-    total_in_db = len(visitors)  # current slice
-    total_unique_blog = await redis.scard("blog:unique_ips") or sum(1 for v in visitors if "/blog" in v.get("pages_viewed", {}))
-    total_count = total_unique_blog
-
-    result = {
-        "total_count": total_count,
-        "total_in_db": total_in_db,
-        "visitors_by_day": visitors_by_day,
-        "chart_days_data": chart_days_data,
-        "visitor_count": len(visitors),
-        "stats": {"humans": humans, "bots": bots, "vpn_users": vpn_users},
-    }
-
-    await redis.set(cache_key, json.dumps(result), ex=60)
-    return result, "cache-miss"
-
-
-
-async def render_blog_visitors_stats_page(request, redis, offset: int = 0, limit: int = 5, days: int = 30):
-    days = max(7, min(days, 30))
-    print(f"[BLOG VISITORS] Loading: offset={offset}, limit={limit}, days={days}")
-
-    # Track view of stats page
-    client_ip = get_real_ip(request)
-    referrer = request.headers.get('referer', 'direct')
-    await track_page_view(client_ip, "/blog_visitors", referrer, redis)
-    await track_referrer(client_ip, referrer, redis)
-
-    data, cache_status = await get_cached_blog_visitors_data(redis, offset, limit, days)
-    print(f"[BLOG VISITORS] {cache_status.upper()} - {data['visitor_count']} blog visitors")
-
-    total_count = data["total_count"]
-    total_in_db = data["total_in_db"]
-    visitors_by_day = data["visitors_by_day"]
-    chart_days_data = data["chart_days_data"]
-    stats = data["stats"]
+    has_more = (offset + limit) < total_unique_blog
+    next_offset = offset + limit if has_more else None
+    prev_offset = max(0, offset - limit) if offset > 0 else None
 
     table_rows = []
-    for day_key in sorted(visitors_by_day.keys(), reverse=True):
-        day_visitors = visitors_by_day[day_key]
-        day_display = datetime.strptime(day_key, "%Y-%m-%d").strftime("%A, %B %d, %Y")
-        count = len(day_visitors)
+    for v in visitors:
+        is_vpn = v.get("is_vpn", False)
+        classification = v.get("classification", "Human")
 
-        table_rows.append(  f'<tr class="day-separator"><td colspan="13">'
-                            f'<div style="padding:10px 0;">'
-                            f'<strong>{day_display}</strong>'
-                            f'<span style="color:#667eea;margin-left:10px;"> ({count} blog visitor{"s" if count != 1 else ""})</span>'
-                            f'</div></td></tr>'
+        if "Relay" in classification:
+            security_badge = fh.Span("🔒 Relay", style="background:#5856d6;color:white;padding:4px 8px;border-radius:4px;font-size:0.85em;")
+        elif is_vpn:
+            security_badge = fh.Span("🔐 VPN", style="background:#ff3b30;color:white;padding:4px 8px;border-radius:4px;font-size:0.85em;")
+        else:
+            security_badge = fh.Span("✓ Clean", style="background:#4cd964;color:white;padding:4px 8px;border-radius:4px;font-size:0.85em;")
+
+        is_human = "Human" in classification
+        class_badge = fh.Span(
+            "👤 " + classification if is_human else "🤖 " + classification,
+            style=f"background:{'rgba(16,185,129,0.15)' if is_human else 'rgba(245,158,11,0.15)'};color:{'#10b981' if is_human else '#f59e0b'};padding:4px 8px;border-radius:4px;font-weight:600;"
         )
-        for v in day_visitors:
-            is_vpn = v.get("is_vpn", False)
-            is_relay = "Relay" in v.get("classification", "")
-            c = v.get("classification", "Human")
-            first_ref = v.get("first_referrer", {})
-            last_ref = v.get("last_referrer", {})
 
-            row = ( '<tr class="visitor-row">'
-                    f'<td data-label="Time">{utc_to_local(v["timestamp"]).strftime("%m/%d %H:%M")}</td>'
-                    f'<td data-label="IP">{v.get("ip", "-")}</td>'
-                    f'<td data-label="Device">{v.get("device", "?")}</td>'
-                    f'<td data-label="Security">{fasthtml_components.sec_badge(is_vpn, is_relay)}</td>'
-                    f'<td data-label="Category">'
-                    f'<div><div style="font-weight:bold;color:{"#ff9500" if "Bot" in c else "#007aff"};">{c}</div>'
-                    f'<div style="font-size:0.8em;opacity:0.7;">{v.get("usage_type", "Residential")}</div></div></td>'
-                    f'<td data-label="First Source">{fasthtml_components.ref_badge(first_ref.get("source", "Direct"), first_ref.get("type", "direct"))}</td>'
-                    f'<td data-label="Last Source">{fasthtml_components.ref_badge(last_ref.get("source", "Direct"), last_ref.get("type", "direct"))}</td>'
-                    f'<td data-label="ISP/Org" style="font-size:0.85em;">{(v.get("isp") or "-")[:40]}</td>'
-                    f'<td data-label="City">{v.get("city", "-")}</td>'
-                    f'<td data-label="Zip">{v.get("zip", "-")}</td>'
-                    f'<td data-label="Country">{v.get("country", "-")}</td>'
-                    f'<td data-label="Visits"><span class="visit-badge">{v.get("visit_count", 1)}</span></td>'
-                    f'<td data-label="Last seen">{utc_to_local(v["timestamp"]).strftime("%H:%M:%S")}</td>'
-                    f'<td data-label="Time Spent">{v.get("total_time_spent", 0)/60:.1f}m</td>'
-                    f'<td data-label="Actions">{v.get("total_actions", 0)}</td>'
-                    f'<td data-label="Scroll %">{v.get("max_scroll_depth", 0):.0f}%</td>'
-                    f'<td data-label="Last Page">{v.get("last_page", "/")[:20]}</td>'
-                    '</tr>'
-            )
-            table_rows.append(row)
+        local_dt = utc_to_local(v["timestamp"])
+        time_str = local_dt.strftime("%m/%d %H:%M")
 
-    table_html = "".join(table_rows)
-    if not table_html:
-        table_html = '<tr><td colspan="13" style="text-align:center;padding:2rem;color:#999;">No blog visitors recorded yet</td></tr>'
+        table_rows.append(
+            fh.Tr(
+                fh.Td(time_str),
+                fh.Td(v["ip"]),
+                fh.Td(f"{v.get('city', 'Unknown')}, {v.get('country', 'Unknown')}"),
+                fh.Td(v.get("device", "Unknown")),
+                fh.Td(class_badge),
+                fh.Td(security_badge),
+                fh.Td(v.get("isp", "-")[:40]),
+                fh.Td(fh.Span(str(v.get("visit_count", 1)), style="background:rgba(99,102,241,0.15);color:#6366f1;padding:4px 8px;border-radius:4px;font-weight:600;")),
+                style="border-bottom:1px solid #e5e7eb;" ) )
 
-    # Safe recent title
-    first_day_visitors_count = 0
-    if visitors_by_day:
-        first_day = list(visitors_by_day.keys())[0]
-        first_day_visitors_count = len(visitors_by_day[first_day])
-
-    recent_title = (f"Recent Blog Visitors (showing {first_day_visitors_count} of last {limit})"
-                    if visitors_by_day else "Recent Blog Visitors (no data yet)" )
-
-    return (
-        fh.Titled("Blog Visitors Dashboard", fh.Meta(name="viewport", content="width=device-width, initial-scale=1.0, maximum-scale=5.0")),
-        fh.Main(
-            fh.H1("Blog Visitors Dashboard", cls="dashboard-title"),
-            # fh.Div( fasthtml_components.stat_card("Unique Blog Visitors", f"{total_count:,}"),
-            #         fasthtml_components.stat_card("Humans (blog)", f"{stats['humans']:,}"),
-            #         fasthtml_components.stat_card("Bots (blog)", f"{stats['bots']:,}"),
-            #         fasthtml_components.stat_card("VPN Users (blog)", f"{stats['vpn_users']:,}"), cls="stats-grid"
-            fh.Div( fasthtml_components.stat_card("Unique Blog Visitors", f"{data['visitor_count']:,}"),
-                    fasthtml_components.stat_card("Humans (blog)", f"{stats['humans']:,}"),
-                    fasthtml_components.stat_card("Bots (blog)", f"{stats['bots']:,}"),
-                    fasthtml_components.stat_card("VPN Users (blog)", f"{stats['vpn_users']:,}"), cls="stats-grid"
-            ),fasthtml_components.pagination(offset, limit, total_in_db, "/blog_visitors", {"days": days}),
-            fh.Div( fh.H2(f"Blog Visitors by Day – Central Time", cls="section-title", style="margin:0;"),
-                    fasthtml_components.range_sel(days, limit, offset, "/blog_visitors"),
-                    style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:15px;"
-            ),
-            fh.Div( fh.Div(fasthtml_components.gradient_chart(chart_days_data), cls="chart-bars-container"), cls="chart-container" ),
+    # ─── Final page ───
+    return fh.Html(
+        fh.Head(
+            fh.Title("Blog Visitor Analytics"),
+            fh.Style("""
+                body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f1f5f9; padding: 20px; }
+                .container { max-width: 1400px; margin: 0 auto; }
+                h1 { font-size: 2.5rem; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+                .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin: 2rem 0; }
+                .stat-card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 1.5rem; }
+                .stat-card:hover { transform: translateY(-4px); box-shadow: 0 8px 16px rgba(99,102,241,0.15); }
+                .stat-number { font-size: 2.5rem; font-weight: 700; color: #6366f1; margin: 0.5rem 0; }
+                .stat-label { font-size: 0.875rem; color: #94a3b8; text-transform: uppercase; }
+                table { width: 100%; background: #1e293b; border: 1px solid #334155; border-radius: 12px; border-collapse: collapse; }
+                th { background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 1rem; text-align: left; font-size: 0.875rem; text-transform: uppercase; }
+                td { padding: 0.875rem; font-size: 0.875rem; }
+                tr:hover { background: rgba(99,102,241,0.05); }
+                .back-link { color: #6366f1; text-decoration: none; font-weight: 500; }
+                .back-link:hover { color: #8b5cf6; }
+                .pagination { display: flex; justify-content: space-between; align-items: center; margin: 2rem 0; }
+                .btn { padding: 0.75rem 1.5rem; background: linear-gradient(135deg, #667eea, #764ba2); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; }
+                .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(99,102,241,0.3); }
+                .btn.disabled { background: #334155; cursor: not-allowed; }
+            """)
+        ),
+        fh.Body(
             fh.Div(
-                fh.H2(recent_title, cls="section-title"),
-                fh.P("← Scroll horizontally to see all columns →", style="text-align:center;color:#667eea;font-size:0.9em;margin-bottom:10px;font-weight:600;"),
-                fh.P("← Scroll horizontally if needed (best on desktop)", cls="mobile-scroll-hint"),
+                fh.H1("📊 Blog Visitor Analytics"),
+                fh.A("← Back to Main Visitors", href="/visitors", cls="back-link"),
+                fh.A("← Back to Site", href="/", cls="back-link", style="margin-left:1.5rem;"),
+                # Stats cards – blog focused
                 fh.Div(
-                    fh.NotStr(
-                        '<table class="table visitors-table">'
-                        '<thead><tr>'
-                        '<th>Time</th><th>IP</th><th>Device</th><th>Security</th><th>Category</th>'
-                        '<th>First Source</th><th>Last Source</th><th>ISP/Org</th>'
-                        '<th>City</th><th>Country</th><th>Visits</th><th>Last seen</th>'
-                        '<th>Time Spent</th><th>Actions</th><th>Scroll %</th><th>Last Page</th>'
-                        '</tr></thead>'
-                        '<tbody>'
-                        f'{table_html}'
-                        '</tbody></table>'
-                    ), cls="table-wrapper",  style="overflow-x:auto;-webkit-overflow-scrolling:touch;"  ), cls="table-wrapper"
-            ),
-            fasthtml_components.pagination(offset, limit, total_in_db, "/blog_visitors", {"days": days}),
-            fasthtml_components.nav_links(  ("← Back to checkboxes", "/"),
-                                            ("All Visitors →", "/visitors", "background:#667eea;"),
-                                            ("Referrers →", "/referrer-stats", "background:#4ecdc4;"),
-                                            ("Time Stats →", "/time-spent-stats", "background:#9b59b6;"),
-                                            ("📝 Blog Post →", "/blog", "background:#e67e22;")
-            ),cls="visitors-container"
-            ))
+                    fh.Div( fh.Div("Unique Blog Visitors", cls="stat-label"), fh.Div(str(total_unique_blog), cls="stat-number"), cls="stat-card" ),
+                    fh.Div( fh.Div("Total Blog Views", cls="stat-label"), fh.Div(str(total_blog_views), cls="stat-number"), cls="stat-card" ),
+                    # You can add more if you compute humans/bots/vpn among blog viewers
+                    cls="stats-grid"
+                ),
+
+                # Pagination
+                fh.Div(
+                    fh.A("← Previous", href=f"/blog-visitors?offset={prev_offset}&limit={limit}", cls="btn") if prev_offset is not None else fh.Span("← Previous", cls="btn disabled"),
+                    fh.Span(f"Showing {offset + 1}-{min(offset + limit, total_in_db_approx)} of ~{total_unique_blog:,}unique"),
+                    fh.A("Next →", href=f"/blog-visitors?offset={next_offset}&limit={limit}", cls="btn") if has_more else fh.Span("Next →", cls="btn disabled"),
+                    cls="pagination" ),
+                fh.H2("Recent Blog Visitors", style="margin-top: 2rem;"),
+                fh.Table(
+                    fh.Thead(
+                        fh.Tr(
+                            fh.Th("Time"), fh.Th("IP"), fh.Th("Location"), fh.Th("Device"),
+                            fh.Th("Classification"), fh.Th("Security"), fh.Th("ISP"), fh.Th("Visits")
+                        )
+                    ),
+                    fh.Tbody(*table_rows) if table_rows else fh.Tbody(fh.Tr(fh.Td("No blog visitors recorded yet", colspan="8", style="text-align:center;padding:2rem;")))
+                ),
+
+                # Bottom pagination
+                fh.Div(
+                    fh.A("← Previous", href=f"/blog-visitors?offset={prev_offset}&limit={limit}", cls="btn") if prev_offset is not None else fh.Span("← Previous", cls="btn disabled"),
+                    fh.Span(f"Showing {offset + 1}-{min(offset + limit, len(ordered_ips))} of ~{total_unique_blog}"),
+                    fh.A("Next →", href=f"/blog-visitors?offset={next_offset}&limit={limit}", cls="btn") if has_more else fh.Span("Next →", cls="btn disabled"),
+                    cls="pagination"
+                ), cls="container"
+            )
+        )
+    )
 
 TRACKER_JS= """
     const tracker = { startTime: Date.now(), lastHeartbeat: Date.now(), scrollDepth: 0,

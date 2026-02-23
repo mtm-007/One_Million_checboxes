@@ -325,5 +325,15 @@ if not referrer and request.query_params.get('utm_source') == 'github':
     </footer>
   </div>
 </div>
+<script>
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) {
+            fetch('/track-blog-view', { 
+                method: 'POST', 
+                keepalive: true 
+            }).catch(() => {});
+        }
+    });
+    </script>
 </body>
 </html>

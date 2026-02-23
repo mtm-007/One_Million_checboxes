@@ -80,27 +80,11 @@ def web():# Start redis server locally inside the container (persisted to volume
     
     async def startup_migration():
         await persistence.init_sqlite_db()
-        await persistence.init_blog_visits_table()
-        await persistence.restore_blog_visits_to_redis(redis)
         if not (redis_count := await redis.get("total_visitors_count"))or int(redis_count) == 0:
             sqlite_count = await persistence.get_visitor_count_sqlite()
             if sqlite_count > 0: print(f"[STARTUP] Redis empty, restoring {sqlite_count} visitors from SQLite...")
         await redis.setbit(checkboxes_bitmap_key, N_CHECKBOXES - 1, 0)
         print("[STARTUP] Bitmap initialized/verified,... Migration check complete")
-
-    async def on_shutdown():
-        print("Shutting down... Saving Redis data")
-        try:
-            
-            await redis.save()
-            print("Redis data saved succesfully")
-        except Exception as e: print(f"Error saving Redis data: {e}")
-        await redis.close() #not necessarily needed here just best practice
-        redis_process.terminate()
-        redis_process.wait()
-        await volume.commit.aio()
-        await logs_volume.commit.aio()
-        print("Logs and Volume committed -data persisted")
        
     async def get_checkbox_range_cached(start_idx: int, end_idx:int):
         """ Load a specific range of chekcboxes, with caching"""
@@ -116,7 +100,8 @@ def web():# Start redis server locally inside the container (persisted to volume
         checked = await redis.bitcount(checkboxes_bitmap_key)
         return checked,N_CHECKBOXES - checked
 
-    web_app = fh.FastHTML( on_startup=[startup_migration], on_shutdown=[on_shutdown], hdrs=[fh.Style(open(css_path_remote, "r").read()),],)
+    #web_app = fh.FastHTML( on_startup=[startup_migration], on_shutdown=[on_shutdown], hdrs=[fh.Style(open(css_path_remote, "r").read()),],)
+    web_app = fh.FastHTML( hdrs=[fh.Style(open(css_path_remote, "r").read()),],)
                                                                                             
     metrics_for_count = { "request_count" : 0,  "last_throughput_log" : time.time() }
     throughput_lock = asyncio.Lock()
@@ -252,17 +237,52 @@ def web():# Start redis server locally inside the container (persisted to volume
     @web_app.get("/visitors")
     async def visitors_page(request, offset: int = 0, limit: int = 5, days: int= 30):
         return await analytics.render_visitors_page(request, redis, offset, limit, days)
-    
+        
+    # @web_app.post("/track-blog-view")
+    # async def track_blog_view(request):
+    #     client_ip = analytics.get_real_ip(request)
+    #     await analytics.track_blog_view(client_ip, "/blog", "", redis)
+    #     return {"status": "ok"}
+    async def track_blog_view(request):
+        client_ip = analytics.get_real_ip(request)
+        await analytics.track_page_view(client_ip, "/blog", "", redis)
+        geo_data = await geo.get_geo(client_ip, redis)
+        await analytics.record_blog_visitor(client_ip,
+                                            request.headers.get('user-agent', 'unknown'),
+                                            geo_data, redis)
+        from starlette.responses import JSONResponse
+        return JSONResponse({"status": "ok"})
+
     @web_app.get("/blog_visitors")
-    async def blog_visitors_page(request, offset: int = 0, limit: int = 5, days: int = 30):
-        return await analytics.render_blog_visitors_stats_page(request, redis, offset, limit, days)
+    async def blog_visitors_page(request, offset: int = 0, limit: int = 5):#, days: int = 30):
+        #return await analytics.render_blog_visitors_stats_page(request, redis, offset, limit, days)
+        return await analytics.blog_visitors_page(redis, offset= offset, limit=limit)
     
     logger.info("✅ One Million Checkboxes App initialized successfully")
 
-   
+    from contextlib import asynccontextmanager
     from starlette.applications import Starlette
     from starlette.responses import FileResponse, HTMLResponse
     from starlette.routing import Route, Mount
+
+    @asynccontextmanager
+    async def lifespan(app):
+        #startup
+        await startup_migration()
+        yield
+        #shutdown
+        print("shuttting down...saving Redis data")
+        try:
+            await redis.save()
+            print("Redis data saved successfully")
+        except Exception as e:
+            print(f"Error saving Redis data: {e}")
+        await redis.close()
+        redis_process.terminate()
+        redis_process.wait()
+        await volume.commit.aio()
+        await logs_volume.commit.aio()
+        print("Logs and Volume commited - data persisted")
 
     async def raw_blog(request):
         client_ip   = analytics.get_real_ip(request)
@@ -277,7 +297,7 @@ def web():# Start redis server locally inside the container (persisted to volume
         
         # If you also call this on the main page:
         geo_data = await geo.get_geo(client_ip, redis)
-        await analytics.record_visitors(client_ip, user_agent, geo_data, redis)
+        await analytics.record_blog_visitor(client_ip, user_agent, geo_data, redis)
 
         try:
             return FileResponse("/root/static/blog.html", media_type="text/html")
@@ -285,12 +305,13 @@ def web():# Start redis server locally inside the container (persisted to volume
             print(f"[BLOG] Failed to serve file: {e}")
             return HTMLResponse( "<h1>Blog temporarily unavailable</h1><p>Error loading content.</p>", status_code=503)
 
-    return Starlette(routes=[
-        Route("/blog", raw_blog),
-        Mount("/", app=web_app),
-    ])
+    return Starlette(
+        lifespan=lifespan,
+        routes=[Route("/blog", raw_blog),
+                Route("/track-blog-view", track_blog_view, methods=["POST"]),
+                Mount("/", app=web_app),]
+        )
     
-
 class Client:
     def __init__(self):
         self.id = str(uuid4())
