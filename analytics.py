@@ -345,8 +345,12 @@ async def handle_session_end(request, redis):
                 blog["last_session_duration"] = duration
                 if (session_raw := await redis.get(f"session:{client_ip}")):
                     session = json.loads(session_raw)
-                    blog["max_scroll_depth"] = max(blog.get("max_scroll_depth", 0), session.get("scroll_depth", 0))
-                    blog["total_actions"] = blog.get("total_actions", 0) + session.get("actions", 0)
+                    session_actions = session.get("actions", 0)
+                    session_scroll = session.get("scroll_depth", 0)
+                    blog["total_actions"] = blog.get("total_actions", 0) + session_actions
+                    blog["last_session_actions"] = session_actions
+                    blog["max_scroll_depth"] = max(blog.get("max_scroll_depth", 0), session_scroll)
+                    blog["last_session_scroll"] = session_scroll
                 await redis.set(f"blog_visitor:{client_ip}", json.dumps(blog))
                 print(f"[BLOG SESSION END] {client_ip} spent {duration:.1f} s (total: {blog['total_time_spent']:.1f}s)")
         else:
@@ -642,6 +646,7 @@ async def blog_visitors_page(redis, offset: int = 0, limit: int = 50):
             fh.Td(f"{v.get('total_time_spent', 0)/60:.1f}m"),
             fh.Td(f"{v.get('last_session_duration', 0)/60:.1f}m"),
             fh.Td(v.get("total_actions", 0)),
+            fh.Td(v.get("last_session_actions", 0)),
             fh.Td(f"{v.get('max_scroll_depth', 0):.0f}%"),
             fh.Td(v.get("last_page", "/")[:20]),
             style="border-bottom:1px solid #e5e7eb;", cls="visitor-row"
@@ -696,8 +701,8 @@ async def blog_visitors_page(redis, offset: int = 0, limit: int = 50):
                         fh.Tr(  fh.Th("Time"), fh.Th("IP"), fh.Th("Device"), fh.Th("Security"),
                                 fh.Th("Category"), fh.Th("First Source"), fh.Th("Last Source"),
                                 fh.Th("ISP/Org"), fh.Th("City"), fh.Th("Zip"), fh.Th("Country"),
-                                fh.Th("Visits"), fh.Th("Last Seen"), fh.Th("Time Time"),fh.Th("Last Session"),
-                                fh.Th("Actions"), fh.Th("Scroll %"), fh.Th("Last Page")
+                                fh.Th("Visits"), fh.Th("Last Seen"), fh.Th("Total Time"),fh.Th("Last Session"),
+                                fh.Th("Total Actions"), fh.Th("Last Actions"),fh.Th("Scroll %"), fh.Th("Last Page")
                         )
                     ),
                     fh.Tbody(*table_rows) if table_rows else fh.Tbody(fh.Tr(fh.Td("No blog visitors recorded yet", colspan="8", style="text-align:center;padding:2rem;")))

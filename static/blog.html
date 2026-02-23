@@ -342,7 +342,7 @@ if not referrer and request.query_params.get('utm_source') == 'github':
             });
     
             this.sendHeartbeat();
-            setInterval(() => { this.sendHeartbeat(); }, 3000);
+            setInterval(() => { this.sendHeartbeat(); }, 1000);
     
             let scrollTimer;
             window.addEventListener('scroll', () => {
