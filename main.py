@@ -238,11 +238,6 @@ def web():# Start redis server locally inside the container (persisted to volume
     async def visitors_page(request, offset: int = 0, limit: int = 5, days: int= 30):
         return await analytics.render_visitors_page(request, redis, offset, limit, days)
         
-    # @web_app.post("/track-blog-view")
-    # async def track_blog_view(request):
-    #     client_ip = analytics.get_real_ip(request)
-    #     await analytics.track_blog_view(client_ip, "/blog", "", redis)
-    #     return {"status": "ok"}
     async def track_blog_view(request):
         client_ip = analytics.get_real_ip(request)
         await analytics.track_page_view(client_ip, "/blog", "", redis)
