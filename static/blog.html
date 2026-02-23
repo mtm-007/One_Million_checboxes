@@ -193,12 +193,13 @@ nav.blog-nav {
       <div class="blog-post-meta">
         Feb 23, 2026
         <span class="meta-sep">·</span>
-        ~10 min read
+        ~12 min read
         <span class="meta-sep">·</span>
         <span class="meta-tag">FastHTML</span>
         <span class="meta-tag">Redis</span>
         <span class="meta-tag">Modal</span>
         <span class="meta-tag">HTMX</span>
+        <span class="meta-tag">Starlette</span>
       </div>
     </header>
 
@@ -207,7 +208,7 @@ nav.blog-nav {
 
       <p>The app is live right now at <a href="https://mtm-007--fasthtml-checkboxes-web.modal.run/">mtm-007--fasthtml-checkboxes-web.modal.run</a>. Go click a few. Someone across the world will see them flip. That still blows my mind.</p>
 
-      <p>This is the full story — every terrible idea, every data-loss panic, every “why is Redis eating my visitors again?”, pulled straight from 227 commits, the code, <code>ARCHITECTURE.md</code> diagrams, and many cold-sweat debugging nights.</p>
+      <p>This is the full story — every terrible idea, every data-loss panic, every “why is Redis eating my visitors again?”, pulled straight from 227 commits, the code, <code>ARCHITECTURE.md</code> diagrams, and many cold-sweat debugging nights. (I literally went through the entire commit history again today to make sure I didn’t miss any war stories.)</p>
 
       <hr />
 
@@ -240,31 +241,40 @@ BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</c
 
       <ul>
         <li><strong>Frontend</strong>: FastHTML + HTMX + responsive CSS (mobile-first, lazy-load 2,000-checkbox chunks)</li>
-        <li><strong>Backend</strong>: FastHTML (Python 3.12, async)</li>
+        <li><strong>Backend</strong>: FastHTML (Python 3.12, async) built on Starlette</li>
         <li><strong>State</strong>: Redis bitmap (hot path) + in-memory client dict + 45s page cache for dashboards</li>
         <li><strong>Analytics</strong>: Geo fallback (ipwho.is → ipapi.co → ip-api.com), bot/VPN classification, referrer parsing (GitHub iframe fix), time-spent heartbeats, scroll-depth, actions</li>
         <li><strong>Persistence</strong>: Modal volume + Redis RDB + SQLite backup/restore (saved me repeatedly)</li>
         <li><strong>Deployment</strong>: Modal serverless + GitHub Actions CI/CD (zero-downtime auto-scaling)</li>
       </ul>
 
-      <p>Full Mermaid diagrams and flows in <code>ARCHITECTURE.md</code> — sequence for toggles, visitor tracking flowchart, layer graph, performance Gantt/pie charts.</p>
+      <p>Full Mermaid diagrams and flows in <code>ARCHITECTURE.md</code>.</p>
 
       <hr />
 
       <h2 id="painful-adventures">The Painful Adventures & Bugs I Fixed</h2>
 
       <ol>
-        <li><strong>“Redis overwrite ate my visitor data” (multiple times)</strong><br />Early Redis hashes, no backup. Redeploy → container dies → gone (even volumes if snapshot bad).<br /><strong>Fix</strong>: <code>persistence.py</code> SQLite backup on shutdown + restore on startup. Feb 23 commit: “blog visitors record lost issue fixed with adding lifespan on starlette” — moved to Starlette lifespan (not old web_app hooks).</li>
+        <li><strong>“Redis overwrite ate my visitor data” (multiple times)</strong><br />Early Redis hashes, no backup. Redeploy → container dies → gone.<br /><strong>Fix</strong>: <code>persistence.py</code> SQLite backup on shutdown + restore on startup + Starlette lifespan handlers (commit: “blog visitors record lost issue fixed with adding lifespan on startlette other then on web_app...”).</li>
 
-        <li><strong>GitHub Referrer Black Hole</strong><br />README traffic showed “Direct”. GitHub iframes use <code>referrerpolicy="no-referrer"</code>.<br /><strong>Fix</strong>: UTM in README link + code fallback. Now correctly “social referral”.</li>
+        <li><strong>GitHub Referrer Black Hole</strong><br />README traffic showed “Direct” because of GitHub’s <code>referrerpolicy="no-referrer"</code> iframe.<br /><strong>Fix</strong>: UTM fallback logic.</li>
 
-        <li><strong>Mermaid Diagram Nightmares in README</strong><br />### NEW comments break parser, parentheses → stadium nodes, en-dashes in ranges illegal, → arrows fail.<br />Many commits: “fix mermaid again”, “check updated readme”.</li>
+        <li><strong>Mermaid Diagram Nightmares in README</strong><br />Comments, parentheses, arrows, en-dashes — all broke the parser. Dozens of “fix mermaid again” commits.</li>
 
-        <li><strong>Blog Visitors Tracking Saga (Feb 21–23 2026)</strong><br />Added blog tracking (scroll, actions, time spent, referrer) → explosion: wrong time math, scroll not persisting, HTML vs FastHTML bugs, parenthesis typos, shutdown loss.<br /><strong>Fixes</strong>: Starlette lifespan, heartbeat + beforeunload beacon, chunk scroll math. Commits: “fix time spent and scroll in blog visits”, “temporary reset for total time spent error”, “getting the scroll and actions data”.</li>
+        <li><strong>Blog Visitors Tracking Saga </strong><br />Time-spent math errors, scroll not persisting, shutdown loss. Fixed with proper lifespan, heartbeat + beforeunload beacon, chunk-based scroll math.</li>
 
-        <li><strong>Refactoring Hell & Code Archaeology</strong><br />Scattered files: <code>one_M_checkboxes_old.py</code>, prototypes, logs. Moved to <code>checkboxes_v0/</code>, <code>monetization_prop/</code>. Early JSON lists → nightmares. Commits cleaning up, fewer lines.</li>
+        <li><strong>Refactoring Hell & Code Archaeology</strong><br />Scattered <code>one_M_checkboxes_old.py</code>, prototypes, logs, DB dumps. Moved everything into <code>checkboxes_v0/</code> and <code>monetization_prop/</code>, deleted dead code, reduced line count dramatically.</li>
 
-        <li><strong>Serverless Gotchas on Modal</strong><br />Redis as subprocess, forced <code>volume.commit.aio()</code> on shutdown, logs survival, multi-container Redis sharing (client manager graceful).</li>
+        <li><strong>Serverless Gotchas on Modal</strong><br />Redis as subprocess, forced volume commits, multi-container Redis sharing, scaling from 1→3 containers.</li>
+
+        <li><strong>FastHTML vs Plain HTML Rendering War </strong><br />I wanted the blog to be beautiful, clean serif typography with zero interference. But the main site’s <code>style_v2.css</code> and FastHTML’s automatic component wrapping / head injection were destroying everything — wrong fonts, broken layout, extra margins, colors overridden.<br />
+        Debug sessions: “running debug session with overridding plain html by fasthtml” and “add a blog post page for testing how it would look”.<br />
+        <strong>Fix</strong>: Switched to pure Starlette to bypass FastHTML entirely. Direct <code>Starlette Response(content=raw_html, media_type="text/html")</code> so the blog renders untouched. Commit: “fixed plain html rendered blog”. This was the cleanest solution — no more fighting the framework.</li>
+
+        <li><strong>Modal App Logs Nightmare</strong><br />Modal’s built-in log viewer is painful for real debugging — no easy tail, delayed, hard to filter prints during hot reloads or crashes.<br />
+        Solution: Added a dedicated log file on the persistent Modal volume. Every <code>print()</code>, error, and custom log now appends to <code>/data/app.log</code>. Plus a small “app modal apps logs extracter script” so I can pull logs instantly after deploys.<br />
+        Commits (Feb 15): “add modal app logs and print statements to saved file” + “add app modal apps logs extracter script, and comment out requirements.txt...”<br />
+        This single change saved hours of “where did my debug output go?” frustration.</li>
       </ol>
 
       <h2 id="what-id-do-differently">What I’d Do Differently Next Time</h2>
@@ -272,9 +282,10 @@ BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</c
       <ul>
         <li>Redis Pub/Sub over polling → instant, less chatty</li>
         <li>Rate limiting (Redis token bucket per IP)</li>
-        <li>Separate analytics DB (Redis great for bitmap, overkill for history)</li>
+        <li>Separate analytics DB</li>
         <li>Cloudflare bot management upstream</li>
-        <li>Pre-commit hooks day one (parenthesis ghosts haunt me)</li>
+        <li>Pre-commit hooks + structured logging to file from day one</li>
+        <li>Decide early: either full FastHTML everywhere or pure Starlette for static/clean pages</li>
       </ul>
 
       <h2 id="takeaways">Takeaways After 227 Commits</h2>
@@ -282,25 +293,26 @@ BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</c
       <ul>
         <li><strong>Bitmaps are magic</strong>. Millions of booleans? Redis bitmaps first.</li>
         <li><strong>Referer header lies</strong>. Ship UTM always.</li>
-        <li><strong>Serverless + volumes incredible</strong>, but master shutdown/lifespan.</li>
-        <li><strong>FastHTML + HTMX stupidly productive</strong>. Full-stack Python, no build step. Joy.</li>
-        <li><strong>Persistence never afterthought</strong>. SQLite backup/restore saved me repeatedly.</li>
-        <li><strong>Small bugs compound</strong>. Missing await, extra parenthesis, aggressive TTL → lying analytics.</li>
+        <li><strong>Serverless + volumes incredible</strong>, but master shutdown/lifespan + explicit file logging.</li>
+        <li><strong>FastHTML + HTMX stupidly productive</strong> — but know when to drop to raw Starlette for pixel-perfect HTML.</li>
+        <li><strong>Persistence & logging are never afterthoughts</strong>. SQLite backup/restore + volume log file saved me repeatedly.</li>
+        <li><strong>Small bugs compound</strong>. One missing await, one extra parenthesis, one CSS bleed, one aggressive TTL — suddenly your whole analytics story is lying.</li>
       </ul>
 
-      <p>Started as weekend toy, became masterclass in system design, load debugging, fast shipping with modern Python.</p>
+      <p>Started as weekend toy, became a masterclass in system design, load debugging, framework boundaries, and shipping fast with modern Python tools.</p>
 
       <p>See the chaos:<br />
       • Repo: <a href="https://github.com/mtm-007/One_Million_checboxes">github.com/mtm-007/One_Million_checboxes</a><br />
       • <code>ARCHITECTURE.md</code> for diagrams<br />
-      • <code>persistence.py</code> for backup/restore dance<br />
-      • <code>main.py</code> for bitmap + diff queue magic</p>
+      • <code>persistence.py</code> for the lifespan + backup dance<br />
+      • <code>main.py</code> for Starlette bypass, blog route, and log file setup<br />
+      • <code>style_v2.css</code> for the final visitor/blog fixes</p>
 
       <p>Go click some boxes. Leave it more chaotic. Build something similar? Drop a link — I want to see your lessons.</p>
 
       <p>Happy hacking,<br />
       mera<br />
-      (Feb 23, 2026 — after yet another “fix time spent and scroll in blog visits” commit)</p>
+      (Feb 23, 2026 — after yet another “fix time spent and scroll in blog visits” + “fixed plain html rendered blog” commit)</p>
     </div>
 
     <footer class="blog-footer">
@@ -310,78 +322,80 @@ BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</c
     </footer>
   </div>
 </div>
+
 <script>
-    const tracker = {
-        startTime: Date.now(), lastHeartbeat: Date.now(), scrollDepth: 0,
-        initialized: false,
-    
-        init() {
-            if (this.initialized) return;
-            this.initialized = true;
-            this.startTime = Date.now();
-            this.actionCount = 0;
-            this.scrollDepth = 0;
+// Your existing tracker script (unchanged)
+const tracker = {
+    startTime: Date.now(), lastHeartbeat: Date.now(), scrollDepth: 0,
+    initialized: false,
 
-            ['click', 'keypress', 'touchstart'].forEach(evt =>{
-                document.addEventListener(evt, () =>{ this.actionCount++; }, { passive: true});
-            });
-    
-            this.sendHeartbeat();
-            setInterval(() => { this.sendHeartbeat(); }, 1000);
-    
-            let scrollTimer;
-            window.addEventListener('scroll', () => {
-                clearTimeout(scrollTimer);
-                scrollTimer = setTimeout(() => {
-                    const depth = Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100);
-                    this.scrollDepth = Math.max(this.scrollDepth, isNaN(depth) ? 0 : depth);
-                    fetch('/track-scroll', { method: 'POST', headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({depth: this.scrollDepth})
-                    }).catch(() => {});
-                }, 500);
-            });
-    
-            window.addEventListener('beforeunload', () => { this.endSession(); });
-            window.addEventListener('pagehide', () => { this.endSession(); });
-        },
-        sendHeartbeat() {
-            const duration = (Date.now() - this.startTime) / 1000;
-            fetch('/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ duration, actions: this.actionCount || 0, timestamp: Date.now() }), keepalive: true
-            }).catch(() => {});
-            this.lastHeartbeat = Date.now();
-        },
-    
-        endSession() {
-            if(this.sessionEnded)return;
-            this.sessionEnded = true;
+    init() {
+        if (this.initialized) return;
+        this.initialized = true;
+        this.startTime = Date.now();
+        this.actionCount = 0;
+        this.scrollDepth = 0;
 
-            const duration = (Date.now() - this.startTime) / 1000;
-            const data = { duration, scrollDepth: this.scrollDepth, timestamp: Date.now(), source: "blog" };
-            if (navigator.sendBeacon) {
-                navigator.sendBeacon('/session-end', new Blob([JSON.stringify(data)], {type: 'application/json'}));
-            } else {
-                fetch('/session-end', { method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(data), keepalive: true }).catch(() => {});
-            }
-        }
-    };
-    
-    // ✅ visibilitychange is OUTSIDE init() so it always fires
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) {
-            tracker.startTime = Date.now();
-            tracker.actionCount = 0;
-            tracker.sessionEnded = false;
-            tracker.init();  // start tracking if not already started
-            fetch('/track-blog-view', { method: 'POST', keepalive: true }).catch(() => {});
-            tracker.sendHeartbeat();
+        ['click', 'keypress', 'touchstart'].forEach(evt =>{
+            document.addEventListener(evt, () =>{ this.actionCount++; }, { passive: true});
+        });
+
+        this.sendHeartbeat();
+        setInterval(() => { this.sendHeartbeat(); }, 1000);
+
+        let scrollTimer;
+        window.addEventListener('scroll', () => {
+            clearTimeout(scrollTimer);
+            scrollTimer = setTimeout(() => {
+                const depth = Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100);
+                this.scrollDepth = Math.max(this.scrollDepth, isNaN(depth) ? 0 : depth);
+                fetch('/track-scroll', { method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({depth: this.scrollDepth})
+                }).catch(() => {});
+            }, 500);
+        });
+
+        window.addEventListener('beforeunload', () => { this.endSession(); });
+        window.addEventListener('pagehide', () => { this.endSession(); });
+    },
+
+    sendHeartbeat() {
+        const duration = (Date.now() - this.startTime) / 1000;
+        fetch('/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ duration, actions: this.actionCount || 0, timestamp: Date.now() }), keepalive: true
+        }).catch(() => {});
+        this.lastHeartbeat = Date.now();
+    },
+
+    endSession() {
+        if(this.sessionEnded)return;
+        this.sessionEnded = true;
+
+        const duration = (Date.now() - this.startTime) / 1000;
+        const data = { duration, scrollDepth: this.scrollDepth, timestamp: Date.now(), source: "blog" };
+        if (navigator.sendBeacon) {
+            navigator.sendBeacon('/session-end', new Blob([JSON.stringify(data)], {type: 'application/json'}));
         } else {
-            tracker.endSession();
+            fetch('/session-end', { method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data), keepalive: true }).catch(() => {});
         }
-    });
-    
-    tracker.init(); // also init on full page load
+    }
+};
+
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+        tracker.startTime = Date.now();
+        tracker.actionCount = 0;
+        tracker.sessionEnded = false;
+        tracker.init();
+        fetch('/track-blog-view', { method: 'POST', keepalive: true }).catch(() => {});
+        tracker.sendHeartbeat();
+    } else {
+        tracker.endSession();
+    }
+});
+
+tracker.init();
 </script>
 </body>
 </html>
