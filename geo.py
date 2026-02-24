@@ -69,49 +69,49 @@ async def get_geo_from_providers(ip:str, redis):
     return {"ip": ip, "usage_type": "Unknown", "city": None, "country": None, "zip": None}
 
 
-# async def get_geo(ip: str, redis):
-#     """Return geo info from ip using cache + fallback providers"""
-#     if (cached := await redis.get(f"geo:{ip}")):
-#         print(f"[GEO] 💾 Cache hit for {ip}")
-#         return json.loads(cached)
-#     print(f"[GEO]  🔍 Cache miss for {ip}, fetching from providers...")
-#     data = await get_geo_from_providers(ip,redis)
-#     try:
-#         await redis.set(f"geo:{ip}", json.dumps(data),ex=6)#4800) #save get_geo api calls to providers #, ex=GEO_TTL_REDIS) ,604800-> 7 days
-#         print(f"[GEO] 💾 Cached geo data for {ip}")
-#     except Exception as e: print(f"[GEO] ⚠️  Failed to cache geo data for {ip}: {e}")
-#     return data
-
-# OPTIONS: "cache" = use cached data, "fresh" = force new lookup, "rollback" = restore from backup
-GEO_MODE = "fresh"
-
 async def get_geo(ip: str, redis):
     """Return geo info from ip using cache + fallback providers"""
-    
-    if GEO_MODE == "rollback":
-        if (backup := await redis.get(f"geo:backup:{ip}")):
-            print(f"[GEO] ⏪ Rolling back to backup for {ip}")
-            await redis.set(f"geo:{ip}", backup)#, ex=86400)
-            return json.loads(backup)
-        print(f"[GEO] ⚠️ No backup found for {ip}, falling through to cache...")
-
-    if GEO_MODE == "fresh":
-        old = await redis.get(f"geo:{ip}")
-        if old: 
-            await redis.set(f"geo:backup:{ip}", old)  # save backup before overwriting
-            print(f"[GEO] 💾 Backed up old data for {ip}")
-        print(f"[GEO] 🔄 Forcing fresh lookup for {ip}")
-        data = await get_geo_from_providers(ip, redis)
-        try: await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
-        except Exception as e: print(f"[GEO] ⚠️ Failed to cache geo data for {ip}: {e}")
-        return data
-
-    # default: GEO_MODE == "cache"
     if (cached := await redis.get(f"geo:{ip}")):
         print(f"[GEO] 💾 Cache hit for {ip}")
         return json.loads(cached)
-    print(f"[GEO] 🔍 Cache miss for {ip}, fetching from providers...")
-    data = await get_geo_from_providers(ip, redis)
-    try: await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
-    except Exception as e: print(f"[GEO] ⚠️ Failed to cache geo data for {ip}: {e}")
+    print(f"[GEO]  🔍 Cache miss for {ip}, fetching from providers...")
+    data = await get_geo_from_providers(ip,redis)
+    try:
+        await redis.set(f"geo:{ip}", json.dumps(data),ex=6)#4800) #save get_geo api calls to providers #, ex=GEO_TTL_REDIS) ,604800-> 7 days
+        print(f"[GEO] 💾 Cached geo data for {ip}")
+    except Exception as e: print(f"[GEO] ⚠️  Failed to cache geo data for {ip}: {e}")
     return data
+
+# OPTIONS: "cache" = use cached data, "fresh" = force new lookup, "rollback" = restore from backup
+# GEO_MODE = "fresh"
+
+# async def get_geo(ip: str, redis):
+#     """Return geo info from ip using cache + fallback providers"""
+    
+#     if GEO_MODE == "rollback":
+#         if (backup := await redis.get(f"geo:backup:{ip}")):
+#             print(f"[GEO] ⏪ Rolling back to backup for {ip}")
+#             await redis.set(f"geo:{ip}", backup)#, ex=86400)
+#             return json.loads(backup)
+#         print(f"[GEO] ⚠️ No backup found for {ip}, falling through to cache...")
+
+#     if GEO_MODE == "fresh":
+#         old = await redis.get(f"geo:{ip}")
+#         if old: 
+#             await redis.set(f"geo:backup:{ip}", old)  # save backup before overwriting
+#             print(f"[GEO] 💾 Backed up old data for {ip}")
+#         print(f"[GEO] 🔄 Forcing fresh lookup for {ip}")
+#         data = await get_geo_from_providers(ip, redis)
+#         try: await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
+#         except Exception as e: print(f"[GEO] ⚠️ Failed to cache geo data for {ip}: {e}")
+#         return data
+
+#     # default: GEO_MODE == "cache"
+#     if (cached := await redis.get(f"geo:{ip}")):
+#         print(f"[GEO] 💾 Cache hit for {ip}")
+#         return json.loads(cached)
+#     print(f"[GEO] 🔍 Cache miss for {ip}, fetching from providers...")
+#     data = await get_geo_from_providers(ip, redis)
+#     try: await redis.set(f"geo:{ip}", json.dumps(data))#, ex=86400)
+#     except Exception as e: print(f"[GEO] ⚠️ Failed to cache geo data for {ip}: {e}")
+#     return data
