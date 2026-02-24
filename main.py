@@ -105,7 +105,6 @@ def web():# Start redis server locally inside the container (persisted to volume
     metrics_for_count = { "request_count" : 0,  "last_throughput_log" : time.time() }
     throughput_lock = asyncio.Lock()
 
-
     @web_app.middleware("http")#ASGI Middleware for latency + throughput logging
     async def metrics_middleware(request, call_next):
         start = time.time()

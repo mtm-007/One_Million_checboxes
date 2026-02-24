@@ -11,8 +11,25 @@ async def get_geo_from_providers(ip:str, redis):
             print(f"[GEO] ✅ ipwho.is succesfully resolved {ip} -> {data.get('city')}, {data.get('country')}")
             sec ,conn = data.get("security", {}), data.get("connection", {})
             org_lower = conn.get("org", "").lower()
-            usage =("Data Center" if sec.get("hosting") else "Education" if any(x in org_lower for x in ["uni", "college", "school"])
-                     else "Business" if any(x in org_lower for x in ["corp", "inc", "ltd"]) else "Cellular" if data.get("type") =="Mobile" else "Residentail")
+            isp_lower = conn.get("isp", "").lower()
+            is_relay_val = sec.get("relay", False) or "icloud" in conn.get("isp", "").lower() or "apple" in org_lower
+
+            hosting_keywords = ["datacamp", "latitude.sh", "gtt", "ace data", "digitalocean", "linode", "vultr", "hetzner", 
+                                "hostroyale", "lonconnect", "allstream", "amazon", "google", "azure", "ovh", "contabo" ]
+
+            business_keywords = ["corp", "inc", "ltd", "llc", "gmbh", "pvt", "technologies", "communications", "networks"]
+
+            relay_keywords = ["fastly", "cloudflare", "akamai", "icloud", "private relay", "apple relay"]
+
+            is_relay_val = ( is_relay_val or any(kw in org_lower or kw in isp_lower for kw in relay_keywords) )
+
+            if sec.get("hosting", False): usage = "Data Center"
+            elif any(kw in org_lower or kw in isp_lower for kw in hosting_keywords): usage = "Data Center"
+            elif data.get("type") == "Mobile": usage = "Cellular"
+            elif any(kw in org_lower or kw in isp_lower for kw in ["uni", "college", "school", "edu", "university"]): usage = "Education"
+            elif any(kw in org_lower or kw in isp_lower for kw in business_keywords): usage = "Business"
+            else: usage = "Residential"
+
             is_relay_val = sec.get("relay", False) or "icloud" in conn.get("isp", "").lower() or "apple" in org_lower
             return{ "ip": ip, "city": data.get("city"), "postal": data.get("postal"), "country": data.get("country"), "region": data.get("region"),
                     "is_vpn": sec.get("vpn", False) or sec.get("proxy", False), "isp": conn.get("isp"), "is_hosting": sec.get("hosting", False),
@@ -22,8 +39,21 @@ async def get_geo_from_providers(ip:str, redis):
         async with httpx.AsyncClient(timeout=3.0) as client:
             r = await client.get(f"http://ip-api.com/json/{ip}?fields=66842239")
         if r.status_code == 200 and (data := r.json()).get("status") == "success":
-            usage = "Data Center" if data.get("hosting") else "Cellular" if data.get("mobile") else "Residential"
-            org_lower, isp_lower = data.get("isp", "").lower(), data.get("org", "").lower()
+            isp_lower, org_lower, = data.get("isp", "").lower(), data.get("org", "").lower()
+
+            hosting_keywords = ["fastly", "cloudflare", "akamai", "datacamp", "latitude.sh", "gtt", "ace data", 
+                                "hostroyale", "lonconnect", "allstream", "amazon", "google", "azure", "ovh", 
+                                "digitalocean", "linode", "vultr", "hetzner", "contabo"]
+
+            business_keywords = ["corp", "inc", "ltd", "llc", "gmbh", "pvt", "technologies", "communications", "networks"]
+
+            if sec.get("hosting", False): usage = "Data Center"
+            elif any(kw in org_lower or kw in isp_lower for kw in hosting_keywords): usage = "Data Center"
+            elif data.get("type") == "Mobile": usage = "Cellular"
+            elif any(kw in org_lower or kw in isp_lower for kw in ["uni", "college", "school", "edu", "university"]): usage = "Education"
+            elif any(kw in org_lower or kw in isp_lower for kw in business_keywords): usage = "Business"
+            else: usage = "Residential"
+            
             is_relay_val = data.get("proxy", False) or any(x in isp_lower or x in org_lower for x in ["icloud", "apple relay", "apple inc"])
             print(f"[GEO] ✅ ip-api.com succesfully resolved {ip}")
             return { "ip": ip, "city": data.get("city"), "isp": data.get("isp"), "usage_type": "Privacy Relay" if is_relay_val else usage,
@@ -40,7 +70,7 @@ async def get_geo(ip: str, redis):
     print(f"[GEO]  🔍 Cache miss for {ip}, fetching from providers...")
     data = await get_geo_from_providers(ip,redis)
     try:
-        await redis.set(f"geo:{ip}", json.dumps(data),ex=604800) #save get_geo api calls to providers #, ex=GEO_TTL_REDIS) ,604800-> 7 days
+        await redis.set(f"geo:{ip}", json.dumps(data),ex=6)#4800) #save get_geo api calls to providers #, ex=GEO_TTL_REDIS) ,604800-> 7 days
         print(f"[GEO] 💾 Cached geo data for {ip}")
     except Exception as e: print(f"[GEO] ⚠️  Failed to cache geo data for {ip}: {e}")
     return data
