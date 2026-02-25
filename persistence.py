@@ -72,3 +72,17 @@ async def get_visitor_count_sqlite():
             async with db.execute("SELECT COUNT(*) FROM visitors") as cur:
                 row = await cur.fetchone(); return row[0] if row else 0
     except Exception  as e: print(f"[SQLite ERROR] Failed to get count: {e}"); return 0
+
+
+
+# def resolve_referrer(request) -> str:
+#     utm_source = request.query_params.get("utm_source")
+#     if utm_source:
+#         parts = [utm_source]
+#         if medium := request.query_params.get("utm_medium"): parts.append(medium)
+#         if campaign := request.query_params.get("utm_campaign"): parts.append(campaign)
+#         return "utm:" + "/".join(parts)
+
+#     referrer = request.headers.get("referer", "").strip()
+#     if referrer: return referrer
+#     return "direct"

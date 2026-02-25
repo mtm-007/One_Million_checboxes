@@ -1,40 +1,9 @@
 import httpx, json
-from urllib.parse import urlparse
-from typing import Dict, Any, Optional
+#from urllib.parse import urlparse
+#from typing import Dict, Any, Optional
 
 
 async def get_geo_from_providers(ip:str, redis):
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            r = await client.get(f"http://ip-api.com/json/{ip}?fields=66842239")
-        if r.status_code == 200 and (data := r.json()).get("status") == "success":
-            sec = data.get("security", {})
-            isp_lower, org_lower = data.get("isp", "").lower(), data.get("org", "").lower()
-            #is_relay_val = data.get("proxy", False) or any(x in isp_lower or x in org_lower for x in ["icloud", "apple relay", "apple inc"])
-
-            hosting_keywords = ["datacamp", "latitude.sh", "gtt", "ace data", "digitalocean", "linode", "vultr", "hetzner", 
-                                "hostroyale", "lonconnect", "allstream", "amazon", "google", "azure", "ovh", "contabo"]
-
-            business_keywords = ["corp", "inc", "ltd", "llc", "gmbh", "pvt", "technologies", "communications", "networks"]
-            relay_keywords = ["fastly", "cloudflare", "akamai", "icloud", "private relay", "apple relay"]
-
-            is_relay_val = ( data.get("proxy", False) or any(kw in isp_lower or kw in org_lower for kw in relay_keywords) or "icloud private relay" in org_lower )
-
-            if is_relay_val: usage = "icloud Private Relay"
-            elif data.get("hosting", False): usage = "Data Center"
-            elif any(kw in org_lower or kw in isp_lower for kw in hosting_keywords): usage = "Data Center"
-            elif data.get("type") == "Mobile": usage = "Cellular"
-            elif any(kw in org_lower or kw in isp_lower for kw in ["uni", "college", "school", "edu", "university"]): usage = "Education"
-            elif any(kw in org_lower or kw in isp_lower for kw in business_keywords): usage = "Business"
-            else: usage = "Residential"
-            
-            print(f"[GEO] ✅ ip-api.com succesfully resolved {ip}")
-            #return { "ip": ip, "city": data.get("city"), "isp": data.get("isp"), "usage_type": "Privacy Relay" if is_relay_val else usage,
-            #         "is_vpn": data.get("proxy", False), "is_hosting": data.get("hosting", False), "is_relay": is_relay_val, "provider": "ip-api.com" }
-            return{ "ip": ip, "city": data.get("city"), "zip": data.get("zip"), "country": data.get("country"), "region": data.get("region"),
-                    "is_vpn": sec.get("vpn", False) or sec.get("proxy", False), "isp": data.get("isp"), "is_hosting": sec.get("hosting", False),
-                    "org": data.get("org"), "asn": data.get("asn"), "usage_type": usage, "is_relay": is_relay_val,"provider": "ip-api.com" }
-    except Exception: pass
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             r = await client.get(f"https://ipwho.is/{ip}?security=1")
@@ -48,13 +17,11 @@ async def get_geo_from_providers(ip:str, redis):
                                 "hostroyale", "lonconnect", "allstream", "amazon", "google", "azure", "ovh", "contabo" ]
 
             business_keywords = ["corp", "inc", "ltd", "llc", "gmbh", "pvt", "technologies", "communications", "networks"]
-
             relay_keywords = ["fastly", "cloudflare", "akamai", "icloud", "private relay", "apple relay"]
-
-            is_relay_val = ( data.get("proxy", False) or any(kw in isp_lower or kw in org_lower for kw in relay_keywords) or "icloud private relay" in org_lower )
+            is_relay_val = ( sec.get("proxy", False) or sec.get("vpn", False) or any(kw in isp_lower or kw in org_lower for kw in relay_keywords) or "icloud private relay" in org_lower )
 
             if is_relay_val: usage = "icloud Private Relay"
-            elif data.get("hosting", False): usage = "Data Center"
+            elif sec.get("hosting", False): usage = "Data Center"
             elif any(kw in org_lower or kw in isp_lower for kw in hosting_keywords): usage = "Data Center"
             elif data.get("type") == "Mobile": usage = "Cellular"
             elif any(kw in org_lower or kw in isp_lower for kw in ["uni", "college", "school", "edu", "university"]): usage = "Education"
@@ -64,10 +31,39 @@ async def get_geo_from_providers(ip:str, redis):
             return{ "ip": ip, "city": data.get("city"), "zip": data.get("zip"), "country": data.get("country"), "region": data.get("region"),
                     "is_vpn": sec.get("vpn", False) or sec.get("proxy", False), "isp": conn.get("isp"), "is_hosting": sec.get("hosting", False),
                     "org": conn.get("org"), "asn": conn.get("asn"), "usage_type": usage, "is_relay": is_relay_val, "provider": "ipwho.is" }
-    except Exception as e:  print(f"[GEO] ❌ ip-api.com failed for  {ip}: {e}")
-    
-    return {"ip": ip, "usage_type": "Unknown", "city": None, "country": None, "zip": None}
+    except Exception: pass
 
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"http://ip-api.com/json/{ip}?fields=status,city,zip,country,regionName,isp,org,hosting,proxy,mobile,query,asn")
+            #r = await client.get(f"http://ip-api.com/json/{ip}?fields=66842239")
+        if r.status_code == 200 and (data := r.json()).get("status") == "success":
+            #sec = data.get("security", {})
+            isp_lower, org_lower = data.get("isp", "").lower(), data.get("org", "").lower()
+            is_hosting_flag = data.get("hosting", False) or data.get("hosting", False)
+            
+            hosting_keywords = ["datacamp", "latitude.sh", "gtt", "ace data", "digitalocean", "linode", "vultr", "hetzner", 
+                                "hostroyale", "lonconnect", "allstream", "amazon", "google", "azure", "ovh", "contabo"]
+
+            business_keywords = ["corp", "inc", "ltd", "llc", "gmbh", "pvt", "technologies", "communications", "networks"]
+            relay_keywords = ["fastly", "cloudflare", "akamai", "icloud", "private relay", "apple relay"]
+            is_relay_val = ( data.get("proxy", False) or any(kw in isp_lower or kw in org_lower for kw in relay_keywords) or "icloud private relay" in org_lower )
+
+            if is_relay_val: usage = "icloud Private Relay"
+            elif is_hosting_flag: usage = "Data Center"
+            elif any(kw in org_lower or kw in isp_lower for kw in hosting_keywords): usage = "Data Center"
+            elif data.get("mobile", False): usage = "Cellular"
+            elif any(kw in org_lower or kw in isp_lower for kw in ["uni", "college", "school", "edu", "university"]): usage = "Education"
+            elif any(kw in org_lower or kw in isp_lower for kw in business_keywords): usage = "Business"
+            else: usage = "Residential"
+            
+            print(f"[GEO] ✅ ip-api.com succesfully resolved {ip}")
+            return{ "ip": ip, "city": data.get("city"), "zip": data.get("zip"), "country": data.get("country"), "region": data.get("regionName"),
+                    "is_vpn": data.get("proxy", False), "isp": data.get("isp"), "is_hosting": is_hosting_flag,
+                    "org": data.get("org"), "asn": data.get("asn"), "usage_type": usage, "is_relay": is_relay_val,"provider": "ip-api.com" }
+    
+    except Exception as e:  print(f"[GEO] ❌ ip-api.com failed for  {ip}: {e}")
+    return {"ip": ip, "usage_type": "Unknown", "city": None, "country": None, "zip": None}
 
 async def get_geo(ip: str, redis):
     """Return geo info from ip using cache + fallback providers"""
@@ -77,7 +73,7 @@ async def get_geo(ip: str, redis):
     print(f"[GEO]  🔍 Cache miss for {ip}, fetching from providers...")
     data = await get_geo_from_providers(ip,redis)
     try:
-        await redis.set(f"geo:{ip}", json.dumps(data),ex=6)#4800) #save get_geo api calls to providers #, ex=GEO_TTL_REDIS) ,604800-> 7 days
+        await redis.set(f"geo:{ip}", json.dumps(data),ex=604800) #save get_geo api calls to providers #, ex=GEO_TTL_REDIS) ,604800-> 7 days
         print(f"[GEO] 💾 Cached geo data for {ip}")
     except Exception as e: print(f"[GEO] ⚠️  Failed to cache geo data for {ip}: {e}")
     return data
