@@ -1,12 +1,11 @@
 import fasthtml.common as fh
-import monsterui.all as mui 
+import monsterui.all as mui
+import os 
 
-#app, rt = fh.fast_app(hdrs=Theme.slate.headers())
-app = fh.FastHTML(hdrs=mui.Theme.blue.headers())
+app = fh.FastHTML(hdrs=mui.Theme.blue.headers(), live=True)
 
 @app.route("/")
 def index():
-    return fh.P(
-        "Hello blog page!"
-    )
+    return map(mui.Card, os.listdir("posts"))
+
 fh.serve()
