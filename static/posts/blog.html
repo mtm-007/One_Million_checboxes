@@ -1,0 +1,509 @@
+---
+title: "Building One Million Checkboxes site"
+description: "Welcome to my first blog post! How I build multi-player checkboxes site with users analytics"
+author: "Merhawi"
+date: "2026-02-26"
+categories: ["Blog", "Table of Contents", "Introduction"]
+image: "https://picsum.photos/400/200?random=10"
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Building One Million Checkboxes</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    background: #fff;
+    color: #333;
+    font-family: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+    font-size: 18px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+}
+nav.blog-nav {
+    border-bottom: 1px solid #e8e8e8;
+    padding: 12px 0;
+}
+.blog-nav-inner {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 30px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+.blog-nav-home {
+    font-size: 17px;
+    font-weight: bold;
+    color: #000;
+    text-decoration: none;
+}
+.blog-nav-links { display: flex; gap: 24px; }
+.blog-nav-links a { font-size: 14px; color: #555; text-decoration: none; }
+.blog-nav-links a:hover { color: #000; }
+.blog-container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 36px 30px 100px;
+    display: flex;
+    gap: 56px;
+    align-items: flex-start;
+}
+.blog-sidebar {
+    width: 200px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 24px;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.blog-sidebar-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #bbb;
+    margin-bottom: 10px;
+}
+.blog-sidebar ul { list-style: none; padding: 0; }
+.blog-sidebar > ul > li { margin-bottom: 8px; }
+.blog-sidebar ul ul { padding-left: 12px; margin-top: 4px; }
+.blog-sidebar ul ul li { margin-bottom: 4px; }
+.blog-sidebar a { color: #666; text-decoration: none; display: block; }
+.blog-sidebar a:hover { color: #000; }
+.blog-article-col { flex: 1; min-width: 0; }
+.blog-post-header { margin-bottom: 32px; }
+.blog-post-header h1 {
+    font-family: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+    font-size: 38px;
+    font-weight: bold;
+    color: #111;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    margin-bottom: 8px;
+}
+.blog-post-meta {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    color: #aaa;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.meta-sep { color: #ddd; }
+.meta-tag {
+    background: #f5f5f5;
+    border-radius: 3px;
+    padding: 1px 7px;
+    color: #888;
+    font-size: 11px;
+}
+.blog-article {
+    font-family: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+    font-size: 18px;
+    line-height: 1.7;
+    color: #333;
+}
+.blog-article p { margin-bottom: 20px; }
+.blog-article > p:first-child { font-size: 19px; color: #222; }
+.blog-article h2 {
+    font-family: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+    font-size: 28px; font-weight: bold; color: #111;
+    margin: 48px 0 14px; line-height: 1.3;
+}
+.blog-article h3 {
+    font-family: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+    font-size: 22px; font-weight: bold; color: #222;
+    margin: 36px 0 12px;
+}
+.blog-article h4 {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 15px; font-weight: bold; color: #333; margin: 28px 0 8px;
+}
+.blog-article strong { color: #111; }
+.blog-article em { font-style: italic; }
+.blog-article a { color: #2a7ae2; text-decoration: none; }
+.blog-article a:hover { text-decoration: underline; }
+.blog-article code {
+    font-family: Menlo, Monaco, "Courier New", monospace;
+    font-size: 14px; background: #f5f5f5; border: 1px solid #ddd;
+    color: #c7254e; padding: 1px 5px; border-radius: 3px;
+}
+.blog-article pre {
+    background: #f8f8f8; border: 1px solid #ddd; border-radius: 3px;
+    padding: 14px 18px; overflow-x: auto; margin: 20px 0; line-height: 1.55;
+}
+.blog-article pre code {
+    background: none; border: none; padding: 0;
+    color: #333; font-size: 13.5px; white-space: pre;
+}
+.blog-article blockquote {
+    border-left: 4px solid #ddd; padding: 4px 0 4px 18px;
+    margin: 24px 0; color: #666; font-style: italic;
+}
+.blog-article hr { border: none; border-top: 1px solid #eee; margin: 40px 0; }
+.blog-article ul { list-style: disc; padding-left: 28px; margin-bottom: 20px; }
+.blog-article ol { list-style: decimal; padding-left: 28px; margin-bottom: 20px; }
+.blog-article li { margin-bottom: 6px; color: #333; }
+.blog-footer {
+    margin-top: 60px; padding-top: 24px; border-top: 1px solid #eee;
+    display: flex; gap: 10px; flex-wrap: wrap;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 13px;
+}
+.blog-footer a {
+    color: #555; text-decoration: none; padding: 5px 12px;
+    border: 1px solid #ddd; border-radius: 3px; background: #fafafa;
+}
+.blog-footer a:hover { color: #000; border-color: #aaa; background: #f0f0f0; }
+@media (max-width: 780px) {
+    .blog-container { flex-direction: column; gap: 0; padding: 24px 20px 80px; }
+    .blog-sidebar { display: none; }
+    .blog-post-header h1 { font-size: 28px; }
+    .blog-article { font-size: 17px; }
+    .blog-article h2 { font-size: 23px; }
+}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    mermaid.run({
+      querySelector: '.language-mermaid'  // Targets your <code class="language-mermaid">
+    });
+  });
+</script>
+</head>
+<body>
+
+<nav class="blog-nav">
+  <div class="blog-nav-inner">
+    <a href="/" class="blog-nav-home">One Million Checkboxes 🧀</a>
+    <div class="blog-nav-links">
+      <a href="/visitors">Visitors</a>
+      <a href="https://github.com/mtm-007/One_Million_checboxes" target="_blank">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<div class="blog-container">
+  <aside class="blog-sidebar">
+    <div class="blog-sidebar-title">Table of Contents</div>
+    <ul>
+      <li><a href="#Introduction">Introduction</a></li>
+      <li><a href="#the-core-idea">The Core Idea</a></li>
+      <li><a href="#the-bitmap-trick">The Bitmap Trick</a></li>
+      <li><a href="#real-time-without-websockets">Real-Time Without WebSockets</a></li>
+      <li><a href="#full-architecture">The Full Architecture</a></li>
+      <li><a href="#painful-adventures">The Painful Adventures & Bugs I Fixed</a></li>
+      <li><a href="#what-id-do-differently">What I’d Do Differently Next Time</a></li>
+      <li><a href="#takeaways">Takeaways After 227 Commits</a></li>
+    </ul>
+  </aside>
+
+  <div class="blog-article-col">
+    <header class="blog-post-header">
+      <h1>Building One Million Checkboxes</h1>
+      <div class="blog-post-meta">
+        Feb 23, 2026
+        <span class="meta-sep">·</span>
+        ~12 min read
+        <span class="meta-sep">·</span>
+        <span class="meta-tag">FastHTML</span>
+        <span class="meta-tag">Redis</span>
+        <span class="meta-tag">Modal</span>
+        <span class="meta-tag">HTMX</span>
+        <span class="meta-tag">Starlette</span>
+      </div>
+    </header>
+
+    <div class="blog-article">
+      <h2 id="Introduction">Introduction </h2>
+      <p>As a junior Machine Learning Engineer, my world had been PyTorch, datasets, training loops, and model checkpoints — zero frontend experience. HTML? CSS? JavaScript? Barely touched them. But I wanted to build something interactive and live for my upcoming diffusion models site (and a few other ideas brewing), so I decided to force myself into the deep end. This "One Million Checkboxes" project was my deliberate hack-around: a fun, absurd excuse to learn real frontend + full-stack deployment skills while shipping something shareable. What started as a side quest turned into one of the best learning explosions I've had.</p>
+
+      <p>A few months ago the silly idea hit: build a real-time collaborative grid with <em>exactly one million checkboxes</em> — anyone clicks, everyone sees it instantly. No login, no accounts, pure shared chaos. It sounded simple. It absolutely was not.</p>
+
+      <p>The app is live right now at <a href="https://mtm-007--fasthtml-checkboxes-web.modal.run/">mtm-007--fasthtml-checkboxes-web.modal.run</a>. Go click a few. Someone across the world will see them flip. That still blows my mind — and now I actually understand how to make it happen.</p>
+
+      <p>This is the full story — every terrible idea, every data-loss panic, every “why is Redis eating my visitors again?”, pulled straight from 227 commits, the code, <code>ARCHITECTURE.md</code> diagrams, and many cold-sweat debugging nights. (I literally went through the entire commit history again today to make sure I didn’t miss any war stories.)</p>
+
+      <hr />
+
+      <h2 id="the-core-idea">The Core Idea (and Why Naïve Approaches Explode)</h2>
+
+      <p>Store one million booleans? Easy, right?<br /><strong>Wrong.</strong> A Python list or JSON blob ≈ 8 MB. Every toggle and render would murder memory and Redis. Thousands of concurrent visitors? Dead server.</p>
+
+      <h3 id="the-bitmap-trick">The Bitmap Trick That Saved Everything</h3>
+
+      <p>Redis bitmaps: 1,000,000 bits = <strong>exactly 125 KB</strong>.</p>
+      <pre><code>SETBIT checkboxes_bitmap 42069 1   → check #42,069
+GETBIT checkboxes_bitmap 42069     → read it
+BITCOUNT checkboxes_bitmap         → live “X / 1,000,000 checked” stats</code></pre>
+
+      <p>One key, one command per toggle/read, tiny memory. This turned impossible into “runs happily on tiny Modal container”.</p>
+
+      <h2 id="real-time-without-websockets">Real-Time Without WebSockets (The HTMX Polling Hack)</h2>
+
+      <p>No WebSocket state, reconnections, heartbeats in prod. Instead: HTMX heresy.</p>
+
+      <ul>
+        <li>Every client polls <code>/diffs/{client_id}</code> every 500 ms</li>
+        <li>Toggle → server adds index to per-client diff queues</li>
+        <li>Next poll → client gets only changes, OOB swap</li>
+      </ul>
+
+      <p>Max 500 ms latency, zero server connection management, scales trivially. Still love this choice — and HTMX became one of my favorite discoveries for future projects.</p>
+
+      <h2 id="full-architecture">The Full Architecture (What Actually Ships)</h2>
+
+      <ul>
+        <li><strong>Frontend</strong>: FastHTML + HTMX + responsive CSS (mobile-first, lazy-load 2,000-checkbox chunks)</li>
+        <li><strong>Backend</strong>: FastHTML (Python 3.12, async) built on Starlette</li>
+        <li><strong>State</strong>: Redis bitmap (hot path) + in-memory client dict + 45s page cache for dashboards</li>
+        <li><strong>Analytics</strong>: Geo fallback (ipwho.is → ipapi.co → ip-api.com), bot/VPN classification, referrer parsing (GitHub iframe fix), time-spent heartbeats, scroll-depth, actions</li>
+        <li><strong>Persistence</strong>: Modal volume + Redis RDB + SQLite backup/restore (saved me repeatedly)</li>
+        <li><strong>Deployment</strong>: Modal serverless + GitHub Actions CI/CD (zero-downtime auto-scaling)</li>
+      </ul>
+
+      <p>Here’s a visual overview of how everything connects (straight from the repo’s README — the high-level system design diagram):</p>
+
+      <pre><code class="language-mermaid">
+graph TD
+subgraph Client_Layer["👥 CLIENT LAYER"]
+    B1[Browser 1<br/>HTMX + Responsive CSS]
+    B2[Browser 2<br/>HTMX + Responsive CSS]
+    BN[Browser N<br/>HTMX + Responsive CSS]
+end
+
+subgraph App_Layer["🖥️ APPLICATION LAYER"]
+    FastHTML[FastHTML / Starlette<br/>Web Server]
+    
+    subgraph Components["Core Components"]
+        Routes[Routes / Handlers]
+        ClientMgr[Client Manager<br/> diff queues]
+        GeoAPI[Geo API Layer]
+        CacheLayer[Redis Cache Layer<br/>45s TTL for dashboards]
+        Metrics[Metrics Middleware<br/>latency + throughput]
+        Logging[File Logging<br/> /logs/app.log]
+    end
+end
+
+subgraph Data_Layer["💾 DATA LAYER - Redis"]
+    Bitmap[Bitmap<br/>1M checkboxes<br/>125KB]
+    Visitor[Visitor Data<br/>Hash + Sorted Set]
+    BlogVisitor[Blog Visitor Data<br/>Separate namespace]
+    GeoCache[Geolocation Cache]
+    PageCache[Page Cache<br/>visitors / referrer stats]
+    Sessions[Session Tracking<br/>heartbeat + beacon]
+end
+
+subgraph Ext_Layer["🌐 EXTERNAL APIS"]
+    API1[ipwho.is]
+    API2[ipapi.co]
+    API3[ip-api.com]
+end
+
+subgraph Storage_Layer["💿 STORAGE LAYER"]
+    Disk[Modal Volume<br/>/data Redis RDB + SQLite<br/>/logs app.log]
+end
+
+%% Connections (same as before + new)
+B1 -->|HTTP/HTMX| FastHTML
+B2 -->|HTTP/HTMX| FastHTML
+BN -->|HTTP/HTMX| FastHTML
+
+FastHTML --- Routes
+FastHTML --- ClientMgr
+FastHTML --- GeoAPI
+FastHTML --- CacheLayer
+FastHTML --- Metrics
+FastHTML --- Logging
+
+Routes -->|GETBIT/SETBIT/BITCOUNT| Bitmap
+ClientMgr -->|Diff Queue| Visitor
+GeoAPI -->|GET/SET| GeoCache
+CacheLayer -->|GET/SET ex=45s| PageCache
+Metrics -->|Log latency/throughput| Logging
+Sessions -->|Heartbeat + Beacon| Visitor
+Sessions -->|Heartbeat + Beacon| BlogVisitor
+
+GeoAPI -->|Fallback chain| API1
+GeoAPI -->|Fallback chain| API2
+GeoAPI -->|Fallback chain| API3
+
+Bitmap -->|Persist RDB| Disk
+Visitor -->|Persist + SQLite| Disk
+BlogVisitor -->|Persist| Disk
+GeoCache -->|Persist| Disk
+PageCache -->|Ephemeral| Disk
+Logging -->|RotatingFileHandler| Disk
+
+%% Styling (kept original + extras)
+classDef clientStyle fill:#667eea,stroke:#764ba2,stroke-width:2px,color:#fff
+classDef appStyle fill:#48bb78,stroke:#38a169,stroke-width:2px,color:#fff
+classDef dataStyle fill:#ed8936,stroke:#dd6b20,stroke-width:2px,color:#fff
+classDef extStyle fill:#4299e1,stroke:#3182ce,stroke-width:2px,color:#fff
+classDef storageStyle fill:#9f7aea,stroke:#805ad5,stroke-width:2px,color:#fff
+classDef cacheStyle fill:#f6e05e,stroke:#d4c757,stroke-width:2px,color:#000
+classDef metricsStyle fill:#ec4899,stroke:#db2777,stroke-width:2px,color:#fff
+
+class B1,B2,BN clientStyle
+class FastHTML,Routes,ClientMgr,GeoAPI,Metrics,Logging appStyle
+class Bitmap,Visitor,BlogVisitor,GeoCache dataStyle
+class API1,API2,API3 extStyle
+class Disk storageStyle
+class CacheLayer,PageCache,Sessions cacheStyle
+class Metrics metricsStyle
+      </code></pre>
+
+      <p>(If your blog platform supports Mermaid rendering, this will show as a nice colored diagram. Otherwise, check the full set in the repo’s README or <code>ARCHITECTURE.md</code>.)</p>
+
+      <hr />
+
+      <h2 id="painful-adventures">The Painful Adventures & Bugs I Fixed</h2>
+
+      <ol>
+        <li><strong>“Redis overwrite ate my visitor data” (multiple times)</strong><br />Early Redis hashes, no backup. Redeploy → container dies → gone.<br /><strong>Fix</strong>: <code>persistence.py</code> SQLite backup on shutdown + restore on startup + Starlette lifespan handlers (commit: “blog visitors record lost issue fixed with adding lifespan on startlette other then on web_app...”).</li>
+
+        <li><strong>GitHub Referrer Black Hole</strong><br />README traffic showed “Direct” because of GitHub’s <code>referrerpolicy="no-referrer"</code> iframe.<br /><strong>Fix</strong>: UTM fallback logic.</li>
+
+        <li><strong>Mermaid Diagram Nightmares in README</strong><br />Comments, parentheses, arrows, en-dashes — all broke the parser. Dozens of “fix mermaid again” commits.</li>
+
+        <li><strong>Blog Visitors Tracking Saga (Feb 21–23 2026)</strong><br />Time-spent math errors, scroll not persisting, shutdown loss. Fixed with proper lifespan, heartbeat + beforeunload beacon, chunk-based scroll math.</li>
+
+        <li><strong>Refactoring Hell & Code Archaeology</strong><br />Scattered <code>one_M_checkboxes_old.py</code>, prototypes, logs, DB dumps. Moved everything into <code>checkboxes_v0/</code> and <code>monetization_prop/</code>, deleted dead code, reduced line count dramatically.</li>
+
+        <li><strong>Serverless Gotchas on Modal</strong><br />Redis as subprocess, forced volume commits, multi-container Redis sharing, scaling from 1→3 containers.</li>
+
+        <li><strong>FastHTML vs Plain HTML Rendering War (Feb 21 commits)</strong><br />Wanted beautiful serif blog with zero interference. Main site’s <code>style_v2.css</code> + FastHTML injection wrecked fonts/layout.<br /><strong>Fix</strong>: Pure Starlette bypass for blog route — raw <code>Response(content=raw_html, media_type="text/html")</code>. Commit: “fixed plain html rendered blog”.</li>
+
+        <li><strong>Modal App Logs Nightmare</strong><br />Modal log viewer painful for real debugging.<br /><strong>Fix</strong>: Dedicated <code>/data/app.log</code> on volume + extractor script. Commits (Feb 15): “add modal app logs and print statements to saved file” + “add app modal apps logs extracter script...”</li>
+      </ol>
+
+      <h2 id="what-id-do-differently">What I’d Do Differently Next Time</h2>
+
+      <ul>
+        <li>Redis Pub/Sub over polling → instant, less chatty</li>
+        <li>Rate limiting (Redis token bucket per IP)</li>
+        <li>Separate analytics DB</li>
+        <li>Cloudflare bot management upstream</li>
+        <li>Pre-commit hooks + structured logging from day one</li>
+        <li>Decide early: full FastHTML or pure Starlette for clean/static pages</li>
+      </ul>
+
+      <h2 id="takeaways">Takeaways After 227 Commits</h2>
+
+      <ul>
+        <li><strong>Bitmaps are magic</strong>. Millions of booleans? Redis bitmaps first.</li>
+        <li><strong>Referer header lies</strong>. Ship UTM always.</li>
+        <li><strong>Serverless + volumes incredible</strong>, but master shutdown/lifespan + explicit file logging.</li>
+        <li><strong>FastHTML + HTMX stupidly productive</strong> — but know when to drop to raw Starlette for pixel-perfect HTML.</li>
+        <li><strong>Persistence & logging are never afterthoughts</strong>. SQLite + volume log file saved me repeatedly.</li>
+        <li><strong>Small bugs compound</strong>. Missing await, extra parenthesis, CSS bleed, aggressive TTL → lying analytics.</li>
+        <li><strong>Jump in even if you're a total beginner on one side</strong>. Coming from pure ML, this forced me to learn frontend deployment end-to-end — exactly the foundation I needed for my diffusion models site and beyond.</li>
+      </ul>
+
+      <p>Started as weekend toy to level up my skills, became a masterclass in system design, load debugging, framework boundaries, and shipping fast with modern Python tools.</p>
+
+      <p>See the chaos:<br />
+      • Repo: <a href="https://github.com/mtm-007/One_Million_checboxes">github.com/mtm-007/One_Million_checboxes</a><br />
+      • <code>ARCHITECTURE.md</code> for all diagrams (including toggle sequence, visitor flow, mindmap, pie/gantt metrics)<br />
+      • <code>persistence.py</code> for the lifespan + backup dance<br />
+      • <code>main.py</code> for Starlette bypass, blog route, and log file setup<br />
+      • <code>style_v2.css</code> for the final visitor/blog fixes</p>
+
+      <p>Go click some boxes. Leave it more chaotic. Building something similar (or your own diffusion playground)? Drop a link — I want to see your lessons too.</p>
+
+      <p>Happy hacking,<br />
+      mera<br />
+      (Feb 23, 2026 — after yet another “fix time spent and scroll in blog visits” + “fixed plain html rendered blog” commit)</p>
+    </div>
+
+    <footer class="blog-footer">
+      <a href="/visitors">← Back to Visitors</a>
+      <a href="/">← Back to Checkboxes</a>
+      <a href="https://github.com/mtm-007/One_Million_checboxes" target="_blank">View Source ↗</a>
+    </footer>
+  </div>
+</div>
+
+<script>
+// Your existing tracker script (unchanged)
+const tracker = {
+    startTime: Date.now(), lastHeartbeat: Date.now(), scrollDepth: 0,
+    initialized: false,
+
+    init() {
+        if (this.initialized) return;
+        this.initialized = true;
+        this.startTime = Date.now();
+        this.actionCount = 0;
+        this.scrollDepth = 0;
+
+        ['click', 'keypress', 'touchstart'].forEach(evt =>{
+            document.addEventListener(evt, () =>{ this.actionCount++; }, { passive: true});
+        });
+
+        this.sendHeartbeat();
+        setInterval(() => { this.sendHeartbeat(); }, 1000);
+
+        let scrollTimer;
+        window.addEventListener('scroll', () => {
+            clearTimeout(scrollTimer);
+            scrollTimer = setTimeout(() => {
+                const depth = Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100);
+                this.scrollDepth = Math.max(this.scrollDepth, isNaN(depth) ? 0 : depth);
+                fetch('/track-scroll', { method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({depth: this.scrollDepth})
+                }).catch(() => {});
+            }, 500);
+        });
+
+        window.addEventListener('beforeunload', () => { this.endSession(); });
+        window.addEventListener('pagehide', () => { this.endSession(); });
+    },
+
+    sendHeartbeat() {
+        const duration = (Date.now() - this.startTime) / 1000;
+        fetch('/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ duration, actions: this.actionCount || 0, timestamp: Date.now() }), keepalive: true
+        }).catch(() => {});
+        this.lastHeartbeat = Date.now();
+    },
+
+    endSession() {
+        if(this.sessionEnded)return;
+        this.sessionEnded = true;
+
+        const duration = (Date.now() - this.startTime) / 1000;
+        const data = { duration, scrollDepth: this.scrollDepth, timestamp: Date.now(), source: "blog" };
+        if (navigator.sendBeacon) {
+            navigator.sendBeacon('/session-end', new Blob([JSON.stringify(data)], {type: 'application/json'}));
+        } else {
+            fetch('/session-end', { method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data), keepalive: true }).catch(() => {});
+        }
+    }
+};
+
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+        tracker.startTime = Date.now();
+        tracker.actionCount = 0;
+        tracker.sessionEnded = false;
+        tracker.init();
+        fetch('/track-blog-view', { method: 'POST', keepalive: true }).catch(() => {});
+        tracker.sendHeartbeat();
+    } else {
+        tracker.endSession();
+    }
+});
+
+tracker.init();
+</script>
+</body>
+</html>
