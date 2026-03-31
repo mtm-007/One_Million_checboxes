@@ -5,12 +5,17 @@ app, rt = fh.fast_app(hdrs=mui.Theme.blue.headers(), live=True)
 
 def NavBar():
     return mui.NavBar(fh.A("Blog", href="/blog"),
-                      fh.A("Team", href="/team"),
+                      fh.A("Team", href=team),
                       fh.A("Services", href="/services"),
-                      brand=fh.H3("Agent Unlock"))
+                      fh.A("Theme", href=theme),
+                      brand=fh.H3("Agent Unlock Labs"))
 
 @rt
-def index():
-    return NavBar()
+def team():
+    return  NavBar(), fh.Titled("Team", fh.P("Agent Unlock Team"))
+
+@rt("/theme")
+def theme():
+    return NavBar(), mui.ThemePicker()
 
 fh.serve()
